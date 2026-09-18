@@ -2004,23 +2004,25 @@ function openZukanPage(charId) {
 
   const body = openDialog(`
     <div class="zukan-page" style="--zukan-el:${elColor(c.element)}">
-      <section class="zukan-hero">
-        <div class="zukan-art-stage">
-          <span class="zukan-no">No.${String(idx).padStart(3, '0')}</span>
-          <div class="zukan-stamps" aria-label="取得したスタンプ">${stamps}</div>
-          <div class="zukan-hero-media" data-hero-media>${zukanHeroMediaHtml(c, 'base', '通常')}</div>
-        </div>
-        <div class="zukan-identity">
-          <h2>${esc(c.name)}</h2>
-          <div><span>${esc(c.category)}</span>${(c.tribes || []).map(tribe => `<em>${esc(tribe)}</em>`).join('')}</div>
-          ${variantButtons}
-        </div>
-      </section>
       <div class="zukan-page-tabs" role="tablist" aria-label="図鑑の項目">
-        ${[['basic', '基本'], ['story', '物語'], ['battle', 'バトル'], ['records', '記録']].map(([key, label], i) => `<button role="tab" data-zukan-tab="${key}" aria-selected="${i === 0}">${label}</button>`).join('')}
+        ${[['character', 'キャラ'], ['basic', '基本'], ['story', '物語'], ['battle', 'バトル'], ['records', '記録']].map(([key, label], i) => `<button role="tab" data-zukan-tab="${key}" aria-selected="${i === 0}">${label}</button>`).join('')}
       </div>
       <div class="zukan-panels">
-        <section class="zukan-panel" data-zukan-panel="basic" role="tabpanel">
+        <section class="zukan-panel zukan-character-panel" data-zukan-panel="character" role="tabpanel">
+          <div class="zukan-hero">
+            <div class="zukan-art-stage">
+              <span class="zukan-no">No.${String(idx).padStart(3, '0')}</span>
+              <div class="zukan-stamps" aria-label="取得したスタンプ">${stamps}</div>
+              <div class="zukan-hero-media" data-hero-media>${zukanHeroMediaHtml(c, 'base', '通常')}</div>
+            </div>
+            <div class="zukan-identity">
+              <h2>${esc(c.name)}</h2>
+              <div><span>種族</span>${(c.tribes || []).map(tribe => `<em>${esc(tribe)}</em>`).join('')}</div>
+              ${variantButtons}
+            </div>
+          </div>
+        </section>
+        <section class="zukan-panel" data-zukan-panel="basic" role="tabpanel" hidden>
           <dl class="zukan-facts">${basicFacts.map(([label, value]) => `<div class="zukan-fact"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>
           <h3 class="zukan-panel-title">★1の文章</h3>
           ${basicStory}
@@ -2064,7 +2066,7 @@ function openZukanPage(charId) {
     show('vault');
   };
   const cardRoot = body.querySelector('[data-card-detail]');
-  const refreshCard = () => mountCardDetail(cardRoot, charId, { refresh: refreshCard });
+  const refreshCard = () => mountCardDetail(cardRoot, charId, { refresh: refreshCard, showImage: false });
   refreshCard();
 }
 
@@ -2825,7 +2827,7 @@ function renderDeckBuilder(box) {
   box.querySelectorAll('[data-artifact]').forEach(b => { b.onclick = () => openArtifactDetail(b.dataset.artifact); });
 }
 
-function cardDetailHtml(id) {
+function cardDetailHtml(id, { showImage = true } = {}) {
   const s = app.server;
   const c = CARD_MAP[id];
   const ch = app.charMap[id];
@@ -2842,7 +2844,7 @@ function cardDetailHtml(id) {
     <div class="bigcard" style="--el:${elColor(c.element)}">
       <div class="bc-head">
         <span class="bc-cost">${c.cost}</span>
-        ${art(ch, { rarity: m.max, size: 64 })}
+        ${showImage ? art(ch, { rarity: m.max, size: 64 }) : ''}
         <div><h2>${esc(c.name)}</h2>
           ${starsHtml(m.max)}
           <span class="chip" style="--el:${elColor(c.element)}">${c.element}</span>
@@ -2878,14 +2880,14 @@ function cardDetailHtml(id) {
 }
 
 // 図鑑とデッキ編集で同じバトル詳細を使う
-function mountCardDetail(root, id, { refresh = null, closeAfterToggle = false } = {}) {
+function mountCardDetail(root, id, { refresh = null, closeAfterToggle = false, showImage = true } = {}) {
   const s = app.server;
   const d = s.deckState();
   const inDeck = d.deck.includes(id);
   const m = s.cardMods(id);
   const rep = m.rep;
-  root.innerHTML = cardDetailHtml(id);
-  const rerender = refresh || (() => mountCardDetail(root, id, { closeAfterToggle }));
+  root.innerHTML = cardDetailHtml(id, { showImage });
+  const rerender = refresh || (() => mountCardDetail(root, id, { closeAfterToggle, showImage }));
 
   root.querySelectorAll('[data-stance]').forEach(button => {
     button.onclick = () => {
