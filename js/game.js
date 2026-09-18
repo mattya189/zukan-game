@@ -1610,9 +1610,10 @@ function gained(amount, label) {
   updateBadges();
 }
 
-function openDialog(html) {
+function openDialog(html, mode = '') {
   $('#dlgBody').innerHTML = html;
   const d = $('#dlg');
+  d.classList.toggle('zukan-page-dialog', mode === 'zukan');
   if (!d.open) d.showModal();
   $('.dlg-inner').scrollTop = 0;
   return $('#dlgBody');
@@ -1885,6 +1886,64 @@ function renderZukan() {
   main.querySelectorAll('.zcell').forEach(el => { el.onclick = () => openZukanPage(el.dataset.id); });
 }
 
+// 図鑑の文章を、従来と同じ「続きを読む」形式で組み立てる
+function zukanStoryTextHtml(text) {
+  return String(text).split('\n').map(line => line.trim()).filter(Boolean).map(line => {
+    const quote = /^「[^」]*」[。、]?$/.test(line);
+    const beat = line.length <= 12 && !quote;
+    return `<p class="${quote ? 'q' : beat ? 'beat' : ''}">${esc(line)}</p>`;
+  }).join('');
+}
+
+function isLongZukanStory(value) {
+  return String(value).length > 60 || String(value).includes('\n');
+}
+
+function zukanStoryPairsHtml(pairs) {
+  const titlePair = pairs.find(([key]) => key === '題');
+  const shortPairs = pairs.filter(([key, value]) => key !== '題' && !isLongZukanStory(value));
+  const longPairs = pairs.filter(([key, value]) => key !== '題' && isLongZukanStory(value));
+  return `${titlePair ? `<h4 class="ztitle">「${esc(titlePair[1])}」</h4>` : ''}
+    ${shortPairs.length ? `<dl class="zfacts">${shortPairs.map(([key, value]) => `<dt>${esc(key)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>` : ''}
+    ${longPairs.map(([key, value]) => {
+      const first = String(value).split('\n').map(line => line.trim()).filter(Boolean)[0] || '';
+      return `<details class="story">
+        <summary><span class="story-label">${esc(key)}</span><span class="story-preview">${esc(first)}</span><span class="story-more">続きを読む（約${String(value).replace(/\s/g, '').length}文字）</span><span class="story-less">たたむ</span></summary>
+        <div class="story-body">${zukanStoryTextHtml(value)}</div>
+      </details>`;
+    }).join('')}`;
+}
+
+function zukanStorySectionHtml(c, g, rarity) {
+  const raw = (STORIES[c.id] || {})[String(rarity)] || [];
+  const pairs = rarity === 1 ? [['分類', c.category], ['種族', (c.tribes || []).join('・')], ...raw] : raw;
+  const count = g.counts[rarity] ? `<span class="zcount">×${g.counts[rarity]}</span>` : '<span class="zcount none">スタンプなし</span>';
+  const unlocked = g.max >= rarity;
+  let content;
+  if (!unlocked) content = `<p class="locked">★${rarity}を引くと開放されます</p>`;
+  else if (!pairs.length) content = '<p class="muted small">この段階の文章はまだ用意されていません。</p>';
+  else content = zukanStoryPairsHtml(pairs);
+  return `<section class="zsec ${unlocked ? '' : 'is-locked'}"><h3>${starsHtml(rarity)}${count}</h3>${content}</section>`;
+}
+
+function zukanTrend(c, stat) {
+  const start = statStart(c, stat);
+  const average = app.chars.reduce((sum, char) => sum + statStart(char, stat), 0) / app.chars.length;
+  const word = start < average * 0.7 ? '低い' : start > average * 1.3 ? '高い' : 'ふつう';
+  return `${word}（出発点${num(start)}）`;
+}
+
+function zukanMeasure(value, unit) {
+  const n = Number(value);
+  return `${Number.isFinite(n) ? n.toLocaleString('ja-JP', { maximumFractionDigits: 1 }) : value}${unit}`;
+}
+
+function zukanHeroMediaHtml(c, slot, label) {
+  const src = slotSrc(c, slot);
+  if (src) return `<img src="${esc(src)}" alt="${esc(c.name)} ${esc(label)}" loading="eager" decoding="async">`;
+  return `<span class="zukan-placeholder" aria-label="${esc(c.name)}の仮の絵">${placeholderSvg(c, null, false, 1, 1)}</span>`;
+}
+
 function openZukanPage(charId) {
   const byChar = zukanSummary();
   const g = byChar[charId];
@@ -1897,84 +1956,116 @@ function openZukanPage(charId) {
       .then(() => openZukanPage(charId));
     return;
   }
+
   const idx = app.chars.indexOf(c) + 1;
-  const mineCount = app.server.vault().filter(i => i.char_id === charId).length;
+  const mineCount = app.server.vault().filter(ind => ind.char_id === charId).length;
   const found = app.server.titleBook(charId);
+  const storyData = STORIES[c.id] || {};
+  const rarityOne = storyData['1'] || [];
+  const rankPair = rarityOne.find(([key]) => key === 'ランク');
+  const basicFacts = [
+    ...(rankPair ? [['ランク', rankPair[1]]] : []),
+    ['分類', c.category],
+    ['種族', (c.tribes || []).join('・') || '—'],
+    ['体重の基準', zukanMeasure(c.base_weight, 'kg')],
+    ['身長の基準', zukanMeasure(c.base_height, 'cm')],
+    ['すばやさ', zukanTrend(c, 'speed')],
+    ['かしこさ', zukanTrend(c, 'wisdom')],
+    ['うんのよさ', zukanTrend(c, 'luck')],
+    ['出やすい性格', (c.likely_natures || []).join('・') || '—']
+  ];
+  const basicStory = rarityOne.length
+    ? zukanStoryPairsHtml(rarityOne)
+    : '<p class="muted small">★1の文章はまだ用意されていません。</p>';
+  const storySections = [1, 2, 3, 4, 5].map(rarity => zukanStorySectionHtml(c, g, rarity)).join('');
+  const hasLongStories = [1, 2, 3, 4, 5].some(rarity => g.max >= rarity && ((storyData[String(rarity)] || []).some(([, value]) => isLongZukanStory(value))));
 
-  const gallery = [['base', '通常', 1], ['r4', '別ポーズ', 4], ['r5', '特別', 5]].map(([slot, label, need]) => {
-    const src = slotSrc(c, slot);
-    let body;
-    if (g.max < need) body = `<div class="lockbox">★${need}で開放</div>`;
-    else if (src) body = `<div class="lockbox"><img src="${esc(src)}" alt="${esc(c.name)} ${label}" style="width:100%;height:100%;object-fit:contain"></div>`;
-    else body = `<div class="lockbox">画像未登録</div>`;
-    return `<figure>${body}<figcaption>${label}</figcaption></figure>`;
-  }).join('');
+  const variants = [
+    { slot: 'base', label: '通常', need: 1 },
+    { slot: 'r4', label: '別ポーズ', need: 4 },
+    { slot: 'r5', label: '特別', need: 5 }
+  ].filter(variant => variant.slot === 'base' || slotSrc(c, variant.slot));
+  const variantButtons = variants.length > 1 ? `<div class="zukan-variants" aria-label="キャラ画像の切り替え">${variants.map(variant => {
+    const locked = g.max < variant.need;
+    return `<button data-art-slot="${variant.slot}" data-art-label="${variant.label}" aria-pressed="${variant.slot === 'base'}" ${locked ? 'disabled' : ''}>${esc(variant.label)}${locked ? `<small>★${variant.need}で開放</small>` : ''}</button>`;
+  }).join('')}</div>` : '';
 
-  // 長い文章は段落に分けて、たためるようにする
-  const storyHtml = text => text.split('\n').map(line => line.trim()).filter(Boolean).map(line => {
-    const quote = /^「[^」]*」[。、]?$/.test(line);
-    const beat = line.length <= 12 && !quote;
-    return `<p class="${quote ? 'q' : beat ? 'beat' : ''}">${esc(line)}</p>`;
-  }).join('');
-  const isLong = v => String(v).length > 60 || String(v).includes('\n');
-
-  const sections = [1, 2, 3, 4, 5].map(r => {
-    const pairs = r === 1 ? [['分類', c.category], ['種族', (c.tribes || []).join('・')], ...((STORIES[c.id] || {})['1'] || [])] : ((STORIES[c.id] || {})[String(r)] || []);
-    const titlePair = pairs.find(([k]) => k === '題');
-    const shortPairs = pairs.filter(([k, v]) => k !== '題' && !isLong(v));
-    const longPairs = pairs.filter(([k, v]) => k !== '題' && isLong(v));
-    const count = g.counts[r] ? `<span class="zcount">×${g.counts[r]}</span>` : '<span class="zcount none">スタンプなし</span>';
-    const unlocked = g.max >= r;
-    let body;
-    if (!unlocked) body = `<p class="locked">★${r}を引くと開放されます</p>`;
-    else if (!pairs.length) body = '<p class="muted small">この段階の文章はまだ用意されていません。</p>';
-    else {
-      body = `${titlePair ? `<h4 class="ztitle">「${esc(titlePair[1])}」</h4>` : ''}
-        ${shortPairs.length ? `<dl class="zfacts">${shortPairs.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('')}</dl>` : ''}
-        ${longPairs.map(([k, v]) => {
-          const first = String(v).split('\n').map(x => x.trim()).filter(Boolean)[0] || '';
-          return `<details class="story">
-            <summary><span class="story-label">${esc(k)}</span><span class="story-preview">${esc(first)}</span><span class="story-more">続きを読む（約${String(v).replace(/\s/g, '').length}文字）</span><span class="story-less">たたむ</span></summary>
-            <div class="story-body">${storyHtml(v)}</div>
-          </details>`;
-        }).join('')}`;
-    }
-    return `<section class="zsec ${unlocked ? '' : 'is-locked'}"><h3>${starsHtml(r)}${count}</h3>${body}</section>`;
-  }).join('');
-  const hasStories = [1, 2, 3, 4, 5].some(r => g.max >= r && (((STORIES[c.id] || {})[String(r)] || []).some(([k, v]) => k !== '題' && isLong(v))));
-
-  const titleTags = TITLES.map(t => found.includes(t.id)
-    ? `<em class="tag title" title="${esc(t.desc)}">${esc(t.name)}</em>`
+  const stamps = [1, 2, 3, 4, 5].map(rarity => `<span class="zukan-stamp ${g.rarities.has(rarity) ? `on${rarity}` : ''}" title="★${rarity}${g.rarities.has(rarity) ? ' 取得済み' : ' 未取得'}">★${rarity}</span>`).join('');
+  const titleTags = TITLES.map(title => found.includes(title.id)
+    ? `<em class="tag title" title="${esc(title.desc)}">${esc(title.name)}</em>`
     : '<em class="tag off">？？？</em>').join('');
 
   const hall = app.server.hall(charId);
-  const hmap = Object.fromEntries(hall.map(h => [`${h.stat}:${h.dir}`, h]));
-  const hallRows = RECORD_SPECS.map(([stat, dir]) => {
-    const h = hmap[`${stat}:${dir}`];
-    return `<tr><td>${STAT_LABEL[stat]}（${dirLabel(stat, dir)}）</td><td class="num">${h ? fmtValue(stat, h.value) : '—'}</td><td>${h ? esc(h.owner_name) : ''}</td></tr>`;
+  const hallMap = Object.fromEntries(hall.map(record => [`${record.stat}:${record.dir}`, record]));
+  const recordFacts = RECORD_SPECS.map(([stat, dir]) => {
+    const record = hallMap[`${stat}:${dir}`];
+    return `<div class="zukan-fact"><dt>${esc(STAT_LABEL[stat])}（${esc(dirLabel(stat, dir))}）</dt><dd>${record ? `<b>${esc(fmtValue(stat, record.value))}</b><small>${esc(record.owner_name)}</small>` : '—'}</dd></div>`;
   }).join('');
 
   const body = openDialog(`
-    <div class="specimen-head">${art(c, { rarity: g.max, size: 96 })}<div><span class="serial">No.${String(idx).padStart(3, '0')}</span><h2>${esc(c.name)}</h2><span class="muted small">${esc(c.category)}</span></div></div>
-    <div class="gallery">${gallery}</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-      <button class="btn" id="seeMine" ${mineCount ? '' : 'disabled'}>保管庫の個体（${mineCount}体）</button>
-      <button class="btn" id="seeCard">バトルカード</button>
-    </div>
-    ${hasStories ? '<div class="story-tools"><button class="btn" id="openAllStories">すべて開く</button><button class="btn" id="closeAllStories">すべてたたむ</button></div>' : ''}
-    ${sections}
-    <section class="zsec"><h3>見つけた称号 ${found.length} / ${TITLES.length}</h3><div class="title-list">${titleTags}</div>
-      <p class="muted small" style="margin:6px 0 0">称号は、個体値がとびぬけている個体に付きます。</p></section>
-    <section class="zsec"><h3>世界記録</h3><table class="simple"><tbody>${hallRows}</tbody></table></section>`);
-  body.querySelector('#seeCard').onclick = () => openCardDetail(charId);
-  const oa = body.querySelector('#openAllStories'), ca = body.querySelector('#closeAllStories');
-  if (oa) oa.onclick = () => body.querySelectorAll('details.story').forEach(d => { d.open = true; });
-  if (ca) ca.onclick = () => body.querySelectorAll('details.story').forEach(d => { d.open = false; });
-  body.querySelector('#seeMine').onclick = () => {
+    <div class="zukan-page" style="--zukan-el:${elColor(c.element)}">
+      <section class="zukan-hero">
+        <div class="zukan-art-stage">
+          <span class="zukan-no">No.${String(idx).padStart(3, '0')}</span>
+          <div class="zukan-stamps" aria-label="取得したスタンプ">${stamps}</div>
+          <div class="zukan-hero-media" data-hero-media>${zukanHeroMediaHtml(c, 'base', '通常')}</div>
+        </div>
+        <div class="zukan-identity">
+          <h2>${esc(c.name)}</h2>
+          <div><span>${esc(c.category)}</span>${(c.tribes || []).map(tribe => `<em>${esc(tribe)}</em>`).join('')}</div>
+          ${variantButtons}
+        </div>
+      </section>
+      <div class="zukan-page-tabs" role="tablist" aria-label="図鑑の項目">
+        ${[['basic', '基本'], ['story', '物語'], ['battle', 'バトル'], ['records', '記録']].map(([key, label], i) => `<button role="tab" data-zukan-tab="${key}" aria-selected="${i === 0}">${label}</button>`).join('')}
+      </div>
+      <div class="zukan-panels">
+        <section class="zukan-panel" data-zukan-panel="basic" role="tabpanel">
+          <dl class="zukan-facts">${basicFacts.map(([label, value]) => `<div class="zukan-fact"><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>
+          <h3 class="zukan-panel-title">★1の文章</h3>
+          ${basicStory}
+        </section>
+        <section class="zukan-panel" data-zukan-panel="story" role="tabpanel" hidden>
+          ${hasLongStories ? '<div class="story-tools"><button class="btn" id="openAllStories">すべて開く</button><button class="btn" id="closeAllStories">すべてたたむ</button></div>' : ''}
+          ${storySections}
+        </section>
+        <section class="zukan-panel" data-zukan-panel="battle" role="tabpanel" hidden><div data-card-detail></div></section>
+        <section class="zukan-panel" data-zukan-panel="records" role="tabpanel" hidden>
+          <h3 class="zukan-panel-title">見つけた称号 ${found.length} / ${TITLES.length}</h3>
+          <div class="title-list">${titleTags}</div>
+          <p class="muted small">称号は、個体値がとびぬけている個体に付きます。</p>
+          <h3 class="zukan-panel-title">世界記録</h3>
+          <dl class="zukan-facts zukan-records">${recordFacts}</dl>
+          <button class="btn primary wide" id="seeMine" ${mineCount ? '' : 'disabled'}>保管庫のこのキャラを見る（${mineCount}体）</button>
+        </section>
+      </div>
+    </div>`, 'zukan');
+
+  body.querySelectorAll('[data-zukan-tab]').forEach(button => {
+    button.onclick = () => {
+      body.querySelectorAll('[data-zukan-tab]').forEach(tab => tab.setAttribute('aria-selected', String(tab === button)));
+      body.querySelectorAll('[data-zukan-panel]').forEach(panel => { panel.hidden = panel.dataset.zukanPanel !== button.dataset.zukanTab; });
+    };
+  });
+  body.querySelectorAll('[data-art-slot]').forEach(button => {
+    button.onclick = () => {
+      body.querySelector('[data-hero-media]').innerHTML = zukanHeroMediaHtml(c, button.dataset.artSlot, button.dataset.artLabel);
+      body.querySelectorAll('[data-art-slot]').forEach(choice => choice.setAttribute('aria-pressed', String(choice === button)));
+    };
+  });
+  const storyPanel = body.querySelector('[data-zukan-panel="story"]');
+  const openAll = body.querySelector('#openAllStories'), closeAll = body.querySelector('#closeAllStories');
+  if (openAll) openAll.onclick = () => storyPanel.querySelectorAll('details.story').forEach(detail => { detail.open = true; });
+  if (closeAll) closeAll.onclick = () => storyPanel.querySelectorAll('details.story').forEach(detail => { detail.open = false; });
+  const mineButton = body.querySelector('#seeMine');
+  if (mineButton) mineButton.onclick = () => {
     app.vf = { ...app.vf, charId, rarity: '', titled: false };
     closeDialog();
     show('vault');
   };
+  const cardRoot = body.querySelector('[data-card-detail]');
+  const refreshCard = () => mountCardDetail(cardRoot, charId, { refresh: refreshCard });
+  refreshCard();
 }
 
 // ---------------------------------------------------------------------
@@ -2734,7 +2825,7 @@ function renderDeckBuilder(box) {
   box.querySelectorAll('[data-artifact]').forEach(b => { b.onclick = () => openArtifactDetail(b.dataset.artifact); });
 }
 
-function openCardDetail(id) {
+function cardDetailHtml(id) {
   const s = app.server;
   const c = CARD_MAP[id];
   const ch = app.charMap[id];
@@ -2747,7 +2838,7 @@ function openCardDetail(id) {
   const rep = m.rep;
   const repInd = rep ? s.vault().find(i => i.uid === rep.uid) : null;
 
-  const body = openDialog(`
+  return `
     <div class="bigcard" style="--el:${elColor(c.element)}">
       <div class="bc-head">
         <span class="bc-cost">${c.cost}</span>
@@ -2783,20 +2874,43 @@ function openCardDetail(id) {
       <div class="bc-sec"><h3>リーダーにしたとき（${c.element}）</h3>${ELEMENTS[c.element].leader}</div>
       <div class="bc-sec small muted">自動計算：点数 ${c.points.budget}（コスト×2+3）− キーワード ${c.points.keywords} − 固有能力 ${c.points.ability} → 攻撃${c.atk}・体力${c.hp}</div>
     </div>
-    <button class="btn ${inDeck ? '' : 'primary'} wide" id="toggleCard" style="margin-top:10px">${inDeck ? 'デッキから外す' : 'デッキに入れる'}</button>`);
+    <button class="btn ${inDeck ? '' : 'primary'} wide" id="toggleCard" style="margin-top:10px">${inDeck ? 'デッキから外す' : 'デッキに入れる'}</button>`;
+}
 
-  body.querySelectorAll('[data-stance]').forEach(b => { b.onclick = () => { s.setStance(id, b.dataset.stance); openCardDetail(id); }; });
-  const sr = body.querySelector('#seeRep');
-  if (sr) sr.onclick = () => openDetail(rep.uid);
-  body.querySelector('#toggleCard').onclick = () => {
+// 図鑑とデッキ編集で同じバトル詳細を使う
+function mountCardDetail(root, id, { refresh = null, closeAfterToggle = false } = {}) {
+  const s = app.server;
+  const d = s.deckState();
+  const inDeck = d.deck.includes(id);
+  const m = s.cardMods(id);
+  const rep = m.rep;
+  root.innerHTML = cardDetailHtml(id);
+  const rerender = refresh || (() => mountCardDetail(root, id, { closeAfterToggle }));
+
+  root.querySelectorAll('[data-stance]').forEach(button => {
+    button.onclick = () => {
+      s.setStance(id, button.dataset.stance);
+      rerender();
+    };
+  });
+  const seeRep = root.querySelector('#seeRep');
+  if (seeRep && rep) seeRep.onclick = () => openDetail(rep.uid);
+  root.querySelector('#toggleCard').onclick = () => {
     try {
       const next = inDeck ? d.deck.filter(x => x !== id) : [...d.deck, id];
       if (!inDeck && next.length > RULES.DECK_SIZE) { toast(`デッキは${RULES.DECK_SIZE}枚までです`); return; }
       s.setDeck({ deck: next, leader: d.leader || id });
-      closeDialog();
-      if (app.tab === 'adventure') renderAdventure();
+      if (closeAfterToggle) {
+        closeDialog();
+        if (app.tab === 'adventure') renderAdventure();
+      } else rerender();
     } catch (e) { toast(e.message); }
   };
+}
+
+function openCardDetail(id) {
+  const body = openDialog('<div data-card-detail></div>');
+  mountCardDetail(body.querySelector('[data-card-detail]'), id, { refresh: () => openCardDetail(id), closeAfterToggle: true });
 }
 
 // ---------------------------------------------------------------------
