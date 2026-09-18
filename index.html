@@ -240,10 +240,10 @@ dialog.zukan-page-dialog {
 dialog.zukan-page-dialog .dlg-inner { height: 100%; max-height: none; padding: 0; overflow: hidden; }
 dialog.zukan-page-dialog .dlg-close { position: absolute; top: 10px; right: 10px; float: none; z-index: 6; }
 dialog.zukan-page-dialog #dlgBody { height: 100%; }
-.zukan-page { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
+.zukan-page { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; }
 .zukan-hero { min-height: 0; background: #EEF2F7; border-bottom: 1px solid var(--line); }
 .zukan-art-stage {
-  position: relative; height: clamp(200px, 38dvh, 320px); min-height: 200px;
+  position: relative; height: clamp(300px, 58dvh, 560px); min-height: 260px;
   display: grid; place-items: center; overflow: hidden;
   background: radial-gradient(circle at 50% 52%, color-mix(in srgb, var(--zukan-el) 25%, white), #EEF2F7 72%);
 }
@@ -269,11 +269,12 @@ dialog.zukan-page-dialog #dlgBody { height: 100%; }
 .zukan-variants button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
 .zukan-variants button:disabled { opacity: .55; }
 .zukan-variants small { display: block; font-size: 9px; font-weight: 500; }
-.zukan-page-tabs { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--paper); border-bottom: 2px solid var(--ink); box-shadow: 0 3px 8px rgba(30,42,74,.08); z-index: 4; }
+.zukan-page-tabs { display: grid; grid-template-columns: repeat(5, 1fr); background: var(--paper); border-bottom: 2px solid var(--ink); box-shadow: 0 3px 8px rgba(30,42,74,.08); z-index: 4; }
 .zukan-page-tabs button { border: 0; border-bottom: 4px solid transparent; background: transparent; padding: 8px 2px 6px; font-weight: 900; color: var(--ink-soft); }
 .zukan-page-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--zukan-el); background: color-mix(in srgb, var(--zukan-el) 8%, white); }
 .zukan-panels { min-height: 0; background: #E9EEF5; }
 .zukan-panel { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px calc(22px + env(safe-area-inset-bottom)); }
+.zukan-character-panel { padding: 0 0 calc(12px + env(safe-area-inset-bottom)); background: #EEF2F7; }
 .zukan-panel-title { margin: 14px 0 7px; font-size: 14px; }
 .zukan-panel-title:first-child { margin-top: 0; }
 .zukan-facts { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
@@ -289,11 +290,11 @@ dialog.zukan-page-dialog #dlgBody { height: 100%; }
 @media (max-width: 360px) {
   .zukan-facts { grid-template-columns: 1fr; }
   .zukan-fact { min-height: 46px; }
-  .zukan-art-stage { height: clamp(200px, 35dvh, 280px); }
+  .zukan-art-stage { height: clamp(280px, 55dvh, 420px); }
 }
 
 @media (max-height: 680px) {
-  .zukan-art-stage { height: clamp(200px, 35dvh, 240px); }
+  .zukan-art-stage { height: clamp(260px, 55dvh, 380px); }
   .zukan-identity { padding-top: 5px; padding-bottom: 6px; }
   .zukan-identity h2 { font-size: 21px; }
   .zukan-page-tabs button { padding-top: 6px; padding-bottom: 4px; }
