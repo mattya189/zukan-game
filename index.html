@@ -232,6 +232,73 @@ table.simple td.num { font-family: var(--dot); text-align: right; white-space: n
 .title-list .tag { font-size: 12px; padding: 1px 7px; }
 .title-list .tag.off { background: #E6EBF3; color: var(--ink-soft); box-shadow: none; }
 
+/* 図鑑のキャラページ */
+dialog.zukan-page-dialog {
+  height: calc(100vh - 16px); height: calc(100dvh - 16px);
+  max-height: calc(100vh - 16px); max-height: calc(100dvh - 16px);
+}
+dialog.zukan-page-dialog .dlg-inner { height: 100%; max-height: none; padding: 0; overflow: hidden; }
+dialog.zukan-page-dialog .dlg-close { position: absolute; top: 10px; right: 10px; float: none; z-index: 6; }
+dialog.zukan-page-dialog #dlgBody { height: 100%; }
+.zukan-page { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr); overflow: hidden; }
+.zukan-hero { min-height: 0; background: #EEF2F7; border-bottom: 1px solid var(--line); }
+.zukan-art-stage {
+  position: relative; height: clamp(200px, 38dvh, 320px); min-height: 200px;
+  display: grid; place-items: center; overflow: hidden;
+  background: radial-gradient(circle at 50% 52%, color-mix(in srgb, var(--zukan-el) 25%, white), #EEF2F7 72%);
+}
+.zukan-art-stage::after { content: ""; position: absolute; left: 15%; right: 15%; bottom: 5px; height: 12px; border-radius: 50%; background: rgba(30,42,74,.1); filter: blur(4px); }
+.zukan-no { position: absolute; top: 10px; left: 12px; z-index: 2; font-family: var(--dot); font-size: 15px; background: rgba(246,248,251,.9); border-radius: 99px; padding: 2px 10px; }
+.zukan-stamps { position: absolute; top: 50px; right: 10px; z-index: 3; display: flex; flex-direction: column; gap: 4px; }
+.zukan-stamp { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; border: 2px solid rgba(30,42,74,.2); background: rgba(246,248,251,.86); color: var(--ink-soft); font-family: var(--dot); font-size: 10px; }
+.zukan-stamp.on1 { color: #fff; background: var(--r1); border-color: var(--r1); }
+.zukan-stamp.on2 { color: #fff; background: var(--r2); border-color: var(--r2); }
+.zukan-stamp.on3 { color: #fff; background: var(--r3); border-color: var(--r3); }
+.zukan-stamp.on4 { color: #fff; background: var(--r4); border-color: var(--r4); }
+.zukan-stamp.on5 { color: var(--ink); background: var(--r5); border-color: var(--r5); }
+.zukan-hero-media { position: absolute; inset: 8px 44px 0; z-index: 1; display: grid; place-items: end center; }
+.zukan-hero-media > img { width: 100%; height: 100%; object-fit: contain; object-position: center bottom; }
+.zukan-placeholder { display: block; width: min(78%, 270px); height: min(88%, 270px); }
+.zukan-placeholder svg { width: 100%; height: 100%; }
+.zukan-identity { padding: 7px 14px 9px; background: var(--paper); }
+.zukan-identity h2 { margin: 0; padding-right: 38px; font-size: 24px; line-height: 1.25; }
+.zukan-identity > div { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 3px; color: var(--ink-soft); font-size: 12px; }
+.zukan-identity em { font-style: normal; background: #E3E8F0; color: var(--ink); border-radius: 99px; padding: 0 7px; font-weight: 700; }
+.zukan-variants { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px !important; margin-top: 6px !important; }
+.zukan-variants button { min-width: 0; border: 1.5px solid var(--line); border-radius: 8px; background: #fff; padding: 3px 4px; font-size: 11px; font-weight: 700; }
+.zukan-variants button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: #fff; }
+.zukan-variants button:disabled { opacity: .55; }
+.zukan-variants small { display: block; font-size: 9px; font-weight: 500; }
+.zukan-page-tabs { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--paper); border-bottom: 2px solid var(--ink); box-shadow: 0 3px 8px rgba(30,42,74,.08); z-index: 4; }
+.zukan-page-tabs button { border: 0; border-bottom: 4px solid transparent; background: transparent; padding: 8px 2px 6px; font-weight: 900; color: var(--ink-soft); }
+.zukan-page-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--zukan-el); background: color-mix(in srgb, var(--zukan-el) 8%, white); }
+.zukan-panels { min-height: 0; background: #E9EEF5; }
+.zukan-panel { height: 100%; overflow-y: auto; overscroll-behavior: contain; padding: 12px 14px calc(22px + env(safe-area-inset-bottom)); }
+.zukan-panel-title { margin: 14px 0 7px; font-size: 14px; }
+.zukan-panel-title:first-child { margin-top: 0; }
+.zukan-facts { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.zukan-fact { min-width: 0; min-height: 52px; margin: 0; display: grid; grid-template-columns: minmax(4.6em, auto) 1fr; align-items: center; gap: 6px; background: #fff; border-radius: 9px; padding: 7px 8px; }
+.zukan-fact dt { color: var(--ink-soft); font-size: 10px; font-weight: 700; line-height: 1.35; }
+.zukan-fact dd { min-width: 0; margin: 0; font-weight: 900; font-size: 13px; line-height: 1.35; overflow-wrap: anywhere; }
+.zukan-fact dd b { font-family: var(--dot); font-weight: 400; }
+.zukan-fact dd small { display: block; color: var(--ink-soft); font-size: 10px; font-weight: 500; }
+.zukan-records { margin-bottom: 12px; }
+.zukan-panel .bigcard { margin-top: 0; }
+.zukan-panel > .story-tools { margin-top: 0; }
+
+@media (max-width: 360px) {
+  .zukan-facts { grid-template-columns: 1fr; }
+  .zukan-fact { min-height: 46px; }
+  .zukan-art-stage { height: clamp(200px, 35dvh, 280px); }
+}
+
+@media (max-height: 680px) {
+  .zukan-art-stage { height: clamp(200px, 35dvh, 240px); }
+  .zukan-identity { padding-top: 5px; padding-bottom: 6px; }
+  .zukan-identity h2 { font-size: 21px; }
+  .zukan-page-tabs button { padding-top: 6px; padding-bottom: 4px; }
+}
+
 /* ---------- 保管庫 ---------- */
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
 .toolbar .count { font-family: var(--dot); font-size: 16px; margin-right: auto; }
