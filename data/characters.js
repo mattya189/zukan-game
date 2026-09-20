@@ -252,13 +252,18 @@ const CHARACTERS = [
     ability: null
   },
   {
-    id: 'chr_027', name: 'コダマ', category: '森のいきもの',
-    story: false, art: { base: 0, r4: 0, r5: 0 }, hue: 150, shape: 0,
-    base_weight: 4, base_height: 30,
-    speed_bias: 500, wisdom_bias: 600, luck_bias: 500, appetite_bias: 300,
-    likely_natures: ['おくびょう', 'おしゃべり'],
-    element: '闇', tribes: ['森', '霧'], cost: 2, ratio: 0.45, keywords: [], skill: '呼び声',
-    ability: { trigger: 'play', effect: { type: 'summon', token: { name: 'こだまの影', atk: 1, hp: 1, keywords: [] } } }
+    id: 'chr_027', name: 'マッチ＝バースクライ', category: '誕生の化身（マッチ神）',
+    story: true, art: { base: 1, r4: 0, r5: 0 }, hue: 25, shape: 2,
+    base_weight: 25, base_height: 190,
+    speed_bias: 650, wisdom_bias: 800, luck_bias: 350, appetite_bias: 300,
+    likely_natures: ['れいせい', 'しんちょう', 'がんこ'],
+    element: '闇', tribes: ['概念種', '大神級'], cost: 2, ratio: 0.5,
+    keywords: ['射程'], skill: '産声宣告',
+    ability: { trigger: 'play', effect: { type: 'buff', target: 'allEnemies', atk: -1 } },
+    ultimate: { name: '初啼宣告', effects: [
+      { type: 'buff', target: 'allEnemies', atk: -1 },
+      { type: 'damage', target: 'allEnemies', amount: 1 }
+    ] }
   },
   {
     id: 'chr_028', name: 'ノワール', category: '夜空のいきもの',

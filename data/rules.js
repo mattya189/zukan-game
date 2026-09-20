@@ -262,12 +262,18 @@ function conditionText(c) {
   }
 }
 
+// 能力値の増減を「+1」「-1」の形で表示する
+function statChangeText(label, value) {
+  if (!value) return '';
+  return `${label}${value > 0 ? '+' : ''}${value}`;
+}
+
 function effectText(e) {
   const t = (TARGET_WORDS[e.target] || '').replace('{tribe}', e.tribe || '');
   switch (e.type) {
     case 'damage': return `${t}に${e.amount}ダメージ`;
     case 'heal': return `${t}を${e.amount}回復`;
-    case 'buff': return `${t}の${[e.atk ? `攻撃+${e.atk}` : '', e.hp ? `体力+${e.hp}` : ''].filter(Boolean).join('、')}`;
+    case 'buff': return `${t}の${[statChangeText('攻撃', e.atk), statChangeText('体力', e.hp)].filter(Boolean).join('、')}`;
     case 'status': return e.status === 'poison' ? `${t}に毒${e.amount}` : `${t}を凍結`;
     case 'shield': return `${t}に盾`;
     case 'summon': return `「${e.token.name}」（${e.token.atk}/${e.token.hp}）を呼ぶ`;
@@ -297,7 +303,7 @@ function abilityPoints(ab) {
   switch (e.type) {
     case 'damage': v = n * ({ randomEnemy: 1, laneEnemy: 1, attackTarget: 0.8, allEnemies: 2.2, enemyLeader: 0.7 }[e.target] || 1); break;
     case 'heal': v = n * ({ lowestAlly: 0.6, allAllies: 1.2, leader: 0.35, self: 0.4, playedAlly: 0.5 }[e.target] || 0.5); break;
-    case 'buff': v = ((e.atk || 0) + (e.hp || 0) * 0.6) * ({ self: 1, allAllies: 2.2, tribeAllies: 1.4, randomAlly: 0.9, playedAlly: 0.9 }[e.target] || 1); break;
+    case 'buff': v = (Math.abs(e.atk || 0) + Math.abs(e.hp || 0) * 0.6) * ({ self: 1, allAllies: 2.2, tribeAllies: 1.4, randomAlly: 0.9, playedAlly: 0.9, allEnemies: 2.2, randomEnemy: 1, laneEnemy: 1 }[e.target] || 1); break;
     case 'status': v = e.status === 'poison'
       ? n * ({ randomEnemy: 0.9, attackTarget: 0.8, laneEnemy: 0.9, allEnemies: 2 }[e.target] || 1)
       : ({ randomEnemy: 1.2, attackTarget: 1, laneEnemy: 1.2, allEnemies: 3 }[e.target] || 1.2); break;
