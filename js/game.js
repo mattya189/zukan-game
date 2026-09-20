@@ -262,7 +262,10 @@ class GameServer {
     s.settings = Object.assign({ sound: true, effects: 'full' }, s.settings || {});
     s.dayOffset = s.dayOffset || 0;
     s.expSeq = s.expSeq || 1;
-    s.battle = Object.assign({ deck: [], leader: '', policy: 'attack', stance: {}, cleared: {}, daily: { date: '', count: 0 }, artifacts: [] }, s.battle || {});
+    s.battle = Object.assign({ deck: [], guardian: DEFAULT_GUARDIAN_ID, policy: 'attack', stance: {}, cleared: {}, daily: { date: '', count: 0 }, artifacts: [] }, s.battle || {});
+    // 旧版のリーダー設定は使わず、初期守護者へ移行する
+    if (!GUARDIAN_MAP[s.battle.guardian] || !this.isGuardianUnlocked(s.battle.guardian)) s.battle.guardian = DEFAULT_GUARDIAN_ID;
+    s.guardianUnlocksKnown = Array.isArray(s.guardianUnlocksKnown) ? s.guardianUnlocksKnown : [];
     STARTER_ARTIFACTS.forEach(id => { if (!s.battle.artifacts.includes(id)) s.battle.artifacts.push(id); });
     for (const ind of s.mine) {
       if (!ind.titles) ind.titles = titlesOf(ind, this.charMap[ind.char_id]);
@@ -627,6 +630,40 @@ class GameServer {
 
   ownedArtifacts() { return ARTIFACTS.filter(a => this.s.battle.artifacts.includes(a.id)).map(a => a.id); }
 
+  // ---------- 守護者 ----------
+  isGuardianUnlocked(id) {
+    const g = GUARDIAN_MAP[id];
+    if (!g || !g.unlock || g.unlock.type === 'none') return false;
+    if (g.unlock.type === 'start') return true;
+    if (g.unlock.type === 'zukan') return new Set(Object.values(this.s.zukan).map(z => z.char_id)).size >= g.unlock.count;
+    if (g.unlock.type === 'quest') return !!this.s.battle.cleared[g.unlock.id];
+    return false;
+  }
+
+  unlockedGuardians() { return GUARDIANS.filter(g => this.isGuardianUnlocked(g.id)); }
+
+  guardianUnlockText(g) {
+    if (!g || !g.unlock) return '解放条件なし';
+    if (g.unlock.type === 'start') return '最初から使用可能';
+    if (g.unlock.type === 'zukan') return `図鑑で${g.unlock.count}体に出会う`;
+    if (g.unlock.type === 'quest') {
+      const q = QUESTS.find(x => x.id === g.unlock.id);
+      return `「${q ? q.name : g.unlock.id}」をクリア`;
+    }
+    return '敵専用';
+  }
+
+  newGuardianUnlocks() {
+    const known = new Set(this.s.guardianUnlocksKnown);
+    const fresh = this.unlockedGuardians().filter(g => !known.has(g.id));
+    if (fresh.length) {
+      fresh.forEach(g => known.add(g.id));
+      this.s.guardianUnlocksKnown = [...known];
+      this._save();
+    }
+    return fresh;
+  }
+
   buyArtifact(id) {
     const a = ARTIFACT_MAP[id];
     if (!a) throw new Error('アーティファクトが見つかりません');
@@ -639,17 +676,15 @@ class GameServer {
   }
 
   _usable() { return new Set([...this.ownedCharIds(), ...this.ownedArtifacts()]); }
-  _firstUnit(deck) { return deck.find(id => !isArtifact(id)) || ''; }
-
   deckState() {
     const b = this.s.battle;
     const owned = this._usable();
     b.deck = b.deck.filter(id => owned.has(id) && getCard(id));
-    if (!b.deck.includes(b.leader) || isArtifact(b.leader)) b.leader = this._firstUnit(b.deck);
-    return { deck: b.deck.slice(), leader: b.leader, policy: b.policy, stance: { ...b.stance } };
+    if (!this.isGuardianUnlocked(b.guardian)) b.guardian = DEFAULT_GUARDIAN_ID;
+    return { deck: b.deck.slice(), guardian: b.guardian, policy: b.policy, stance: { ...b.stance } };
   }
 
-  setDeck({ deck, leader, policy }) {
+  setDeck({ deck, guardian, policy }) {
     const b = this.s.battle;
     const owned = this._usable();
     if (deck) {
@@ -658,9 +693,11 @@ class GameServer {
       if (clean.filter(isArtifact).length > RULES.MAX_ARTIFACTS) throw new Error(`アーティファクトは${RULES.MAX_ARTIFACTS}枚までです`);
       b.deck = clean;
     }
-    if (leader !== undefined && !isArtifact(leader)) b.leader = leader;
+    if (guardian !== undefined) {
+      if (!this.isGuardianUnlocked(guardian)) throw new Error('その守護者はまだ使えません');
+      b.guardian = guardian;
+    }
     if (policy && POLICIES[policy]) b.policy = policy;
-    if (!b.deck.includes(b.leader)) b.leader = this._firstUnit(b.deck);
     this._save();
     return this.deckState();
   }
@@ -689,16 +726,12 @@ class GameServer {
     const deck = [];
     for (const [test, n] of buckets) pool.filter(test).slice(0, n).forEach(c => deck.push(c.id));
     for (const c of pool) { if (deck.length >= unitTarget) break; if (!deck.includes(c.id)) deck.push(c.id); }
-    const count = {};
-    deck.forEach(id => { const e = CARD_MAP[id].element; count[e] = (count[e] || 0) + 1; });
-    const mainEl = Object.keys(count).sort((a, b) => count[b] - count[a])[0];
-    const leader = deck.filter(id => CARD_MAP[id].element === mainEl).sort((a, b) => CARD_MAP[b].cost - CARD_MAP[a].cost)[0] || deck[0] || '';
-    return this.setDeck({ deck: [...deck.slice(0, unitTarget), ...(deck.length >= RULES.MIN_UNITS ? arts : [])], leader });
+    return this.setDeck({ deck: [...deck.slice(0, unitTarget), ...(deck.length >= RULES.MIN_UNITS ? arts : [])] });
   }
 
   deckErrors(rules = []) {
     const d = this.deckState();
-    return validateDeck(d.deck, d.leader, rules);
+    return validateDeck(d.deck, rules);
   }
 
   questStatus(qid) {
@@ -718,8 +751,9 @@ class GameServer {
     return new Battle({
       seed: Math.floor(Math.random() * 1e9), rules: q.rules, goalTurns: q.goalTurns,
       players: [
-        { name: this.s.player.display_name, deck: d.deck, leader: d.leader, policy: d.policy, mods },
-        { name: q.enemy.name, deck: q.enemy.deck, leader: q.enemy.leader, policy: q.enemy.policy, hp: q.enemy.hp, ultimates: !!q.enemy.ultimates }
+        { name: this.s.player.display_name, deck: d.deck, guardian: d.guardian, policy: d.policy, mods },
+        { name: q.enemy.name, deck: q.enemy.deck, guardian: q.enemy.guardian || DEFAULT_ENEMY_GUARDIAN_ID, guardianHp: q.enemy.guardianHp,
+          guardianGaugeRate: q.enemy.guardianGaugeRate, guardianSkillUses: q.enemy.guardianSkillUses, policy: q.enemy.policy, ultimates: !!q.enemy.ultimates }
       ]
     });
   }
@@ -738,7 +772,8 @@ class GameServer {
     this.s.player.coins += gained;
     this._progress('battle', 1);
     this._save();
-    return { win: true, gained, first, capped, coins: this.s.player.coins };
+    const guardians = this.newGuardianUnlocks();
+    return { win: true, gained, first, capped, coins: this.s.player.coins, guardians };
   }
 
   // テスト用
@@ -764,7 +799,7 @@ class Rng {
 const SIDE_NAME = ['あなた', '相手'];
 
 class Battle {
-  // opts: { seed, players: [{ name, deck:[id], leader:id, policy, hp? }, ...], rules:[], goalTurns, record }
+  // opts: { seed, players: [{ name, deck:[id], guardian:id, policy }, ...], rules:[], goalTurns, record }
   constructor(opts) {
     this.rng = new Rng(opts.seed >>> 0);
     this.rules = opts.rules || [];
@@ -779,14 +814,14 @@ class Battle {
     this.deathCount = 0;
     this.stats = { plays: [0, 0], damageToLeader: [0, 0] };
     this.p = opts.players.map((pl, side) => {
-      const leaderCard = CARD_MAP[pl.leader];
-      const bonus = leaderCard.element === '土' ? (RULES.EARTH_HP_BONUS || 8) : 0;
-      const hp = (pl.hp || RULES.LEADER_HP) + bonus;
+      const guardian = GUARDIAN_MAP[pl.guardian] || GUARDIAN_MAP[side === 0 ? DEFAULT_GUARDIAN_ID : DEFAULT_ENEMY_GUARDIAN_ID];
+      const hp = pl.guardianHp || guardian.hp;
       return {
-        side, name: pl.name, leader: leaderCard, element: leaderCard.element, policy: pl.policy || 'attack',
+        side, name: pl.name, guardian, policy: pl.policy || 'attack', autoGuardian: pl.autoGuardian !== undefined ? !!pl.autoGuardian : side === 1,
         hp, maxHp: hp, deck: this.rng.shuffle(pl.deck.slice()), hand: [], energy: 0, fatigue: 0,
         board: { front: [null, null, null], back: [null, null, null] },
-        commandsLeft: RULES.COMMANDS, pending: null,
+        guardianGauge: 0, guardianGaugeRate: pl.guardianGaugeRate || guardian.gaugeRate || 1, guardianUltimateUsed: false,
+        guardianSkillUses: guardian.skills.map((s, i) => pl.guardianSkillUses?.[i] ?? s.uses), pendingGuardian: null,
         mods: pl.mods || {}, ultimates: !!pl.ultimates, relics: []
       };
     });
@@ -796,7 +831,8 @@ class Battle {
   snapshot() {
     const u = x => x && ({ uid: x.uid, side: x.side, cardId: x.cardId, ultimate: !!x.ultimate, spd: this.speedOf(x), first: this.has(x, '先制'), name: x.name, atk: this.atkOf(x), hp: x.hp, maxHp: x.maxHp, keywords: x.keywords.slice(), shield: x.shield, hidden: x.hidden, poison: x.poison, frozen: x.frozen, token: x.token, hue: x.hue, shape: x.shape, img: x.img, element: x.element });
     return this.p.map(pl => ({
-      hp: pl.hp, maxHp: pl.maxHp, energy: pl.energy, hand: pl.hand.length, relics: pl.relics.map(r => ({ id: r.id, name: r.name, icon: r.icon })), deck: pl.deck.length, commandsLeft: pl.commandsLeft, pending: pl.pending,
+      hp: pl.hp, maxHp: pl.maxHp, energy: pl.energy, hand: pl.hand.length, relics: pl.relics.map(r => ({ id: r.id, name: r.name, icon: r.icon })), deck: pl.deck.length,
+      guardian: { id: pl.guardian.id, name: pl.guardian.name, title: pl.guardian.title }, guardianGauge: pl.guardianGauge, guardianUltimateUsed: pl.guardianUltimateUsed, guardianSkillUses: pl.guardianSkillUses.slice(), pendingGuardian: pl.pendingGuardian,
       front: pl.board.front.map(u), back: pl.board.back.map(u)
     }));
   }
@@ -833,10 +869,130 @@ class Battle {
     if (row[u.lane + 1]) near.push(row[u.lane + 1]);
     if (other[u.lane]) near.push(other[u.lane]);
     a += near.filter(x => x !== u && this.has(x, '鼓舞') && x.hp > 0).length;
-    if (this.p[u.side].element === '風' && this.has(u, '飛行')) a += 1;
+    for (const e of this.p[u.side].guardian.passive?.effects || []) {
+      if (e.type === 'elementAtk' && u.element === e.element) a += e.amount;
+    }
     return Math.max(0, a);
   }
   speedOf(u) { return u.speed; }
+
+  guardianSource(side) {
+    const g = this.p[side].guardian;
+    return { side, lane: 1, row: 'front', hue: g.hue || 0, name: g.name, skill: g.name, tribes: [], keywords: [], onBoard: false, hp: 1, maxHp: 1, guardian: true, ability: null };
+  }
+
+  gainGuardianGauge(side, base) {
+    const pl = this.p[side];
+    if (pl.guardianUltimateUsed) return;
+    const n = Math.max(0, Math.round(base * pl.guardianGaugeRate));
+    pl.guardianGauge = Math.min(100, pl.guardianGauge + n);
+  }
+
+  guardianActionDef(side, action) {
+    const pl = this.p[side];
+    if (action === 'ultimate') return pl.guardian.ultimate;
+    const m = /^skill([01])$/.exec(action || '');
+    return m ? pl.guardian.skills[Number(m[1])] : null;
+  }
+
+  guardianActionAvailable(side, action) {
+    const pl = this.p[side];
+    if (!this.guardianActionDef(side, action)) return false;
+    if (action === 'ultimate') return !pl.guardianUltimateUsed && pl.guardianGauge >= 100;
+    const i = Number(action.slice(-1));
+    return pl.guardianSkillUses[i] > 0;
+  }
+
+  guardianEffectUseful(side, e) {
+    const pl = this.p[side];
+    const allies = this.units(side), enemies = this.units(1 - side);
+    switch (e.type) {
+      case 'dreamRock': return allies.some(u => u.element === e.element);
+      case 'summon': return ['front', 'back'].some(row => pl.board[row].some(x => !x));
+      case 'shield': return allies.some(u => !u.shield);
+      case 'heal': return e.target === 'leader' ? pl.hp < pl.maxHp : allies.some(u => u.hp < u.maxHp);
+      case 'buff': return e.target === 'allEnemies' ? enemies.length > 0 : allies.length > 0;
+      case 'debuff': return enemies.length > 0;
+      case 'draw': return pl.deck.length > 0 && pl.hand.length < RULES.HAND_MAX;
+      case 'status': return enemies.length > 0;
+      case 'extraAttack': return allies.some(u => this.chooseTarget(u));
+      case 'elementShift': return allies.some(u => u.element !== e.element);
+      default: return true;
+    }
+  }
+
+  guardianActionUseful(side, action) {
+    const d = this.guardianActionDef(side, action);
+    const effects = d ? (d.effects || (d.effect ? [d.effect] : [])) : [];
+    return effects.some(e => this.guardianEffectUseful(side, e));
+  }
+
+  chooseGuardianAction(side) {
+    if (this.guardianActionAvailable(side, 'ultimate') && this.guardianActionUseful(side, 'ultimate')) return 'ultimate';
+    for (const action of ['skill0', 'skill1']) {
+      if (this.guardianActionAvailable(side, action) && this.guardianActionUseful(side, action)) return action;
+    }
+    return null;
+  }
+
+  executeGuardianAction(side, action) {
+    if (!this.guardianActionAvailable(side, action) || !this.guardianActionUseful(side, action)) return false;
+    const pl = this.p[side];
+    const d = this.guardianActionDef(side, action);
+    const effects = d.effects || (d.effect ? [d.effect] : []);
+    this.emit({ t: 'guardian', side, ultimate: action === 'ultimate', action, text: `${pl.guardian.name}の${action === 'ultimate' ? '必殺技' : 'スキル'}「${d.name}」` });
+    for (const e of effects) {
+      this.applyGuardianEffect(side, e);
+      this.resolveDeaths();
+      if (this.over) break;
+    }
+    if (action === 'ultimate') {
+      pl.guardianGauge = 0;
+      pl.guardianUltimateUsed = true;
+    } else {
+      pl.guardianSkillUses[Number(action.slice(-1))]--;
+    }
+    return true;
+  }
+
+  applyGuardianEffect(side, e) {
+    const source = this.guardianSource(side);
+    if (e.type === 'dreamRock') {
+      const allies = this.units(side).filter(u => u.element === e.element);
+      const hurt = allies.filter(u => u.hp < u.maxHp && !u.shield).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
+      if (hurt) {
+        hurt.shield = true;
+        this.emit({ t: 'shield', side, uid: hurt.uid, text: `${this.unitLabel(hurt)}に盾` });
+        return;
+      }
+      const attacker = allies.filter(u => this.chooseTarget(u)).sort((a, b) => this.atkOf(b) - this.atkOf(a))[0];
+      if (attacker) this.attack(attacker, this.chooseTarget(attacker));
+      else {
+        const target = allies.find(u => !u.shield) || allies[0];
+        if (!target) return;
+        target.shield = true;
+        this.emit({ t: 'shield', side, uid: target.uid, text: `${this.unitLabel(target)}に盾` });
+      }
+      return;
+    }
+    if (e.type === 'extraAttack') {
+      let allies = this.units(side).filter(u => this.chooseTarget(u));
+      if (e.target !== 'allAllies') allies = allies.length ? [this.rng.pick(allies)] : [];
+      for (const u of allies.slice()) if (this.alive(u)) { const target = this.chooseTarget(u); if (target) this.attack(u, target); this.resolveDeaths(); }
+      return;
+    }
+    if (e.type === 'elementShift') {
+      for (const u of this.units(side)) {
+        if (u.elementShiftTurns || u.element === e.element) continue;
+        u.originalElement = u.element;
+        u.element = e.element;
+        u.elementShiftTurns = e.turns;
+      }
+      this.emit({ t: 'buff', side, text: `味方全員を${e.turns}ターンの間、${e.element}属性にした` });
+      return;
+    }
+    this.applyEffect(source, e, {});
+  }
 
   // ---------- 開始 ----------
   start() {
@@ -864,19 +1020,15 @@ class Battle {
   }
 
   // ---------- 1ターン ----------
-  nextTurn(commands = {}) {
+  nextTurn(actions = {}) {
     if (this.over) return [];
     this.turn++;
     this.emit({ t: 'turn', text: `ターン ${this.turn}` });
 
+    for (const side of [0, 1]) this.gainGuardianGauge(side, 8);
     for (const side of [0, 1]) {
-      const cmd = commands[side];
-      const pl = this.p[side];
-      if (cmd && COMMANDS[cmd] && pl.commandsLeft > 0) {
-        pl.commandsLeft--;
-        pl.pending = cmd;
-        this.emit({ t: 'command', side, text: `${SIDE_NAME[side]}の号令「${COMMANDS[cmd].name}」` });
-      }
+      const action = actions[side];
+      if (action && this.guardianActionAvailable(side, action)) this.p[side].pendingGuardian = action;
     }
 
     for (const pl of this.p) {
@@ -888,16 +1040,9 @@ class Battle {
     // ターン開始時
     for (const u of this.orderedUnits()) if (this.alive(u)) this.trigger(u, 'turnStart');
     for (const side of [0, 1]) this.triggerRelics(side, 'turnStart');
-    if (this.p.some(pl => pl.element === '光') && this.turn % 4 === 0) {
-      for (const pl of this.p) {
-        if (pl.element !== '光') continue;
-        const t = this.rng.pick(this.units(pl.side).filter(x => !x.shield));
-        if (t) { t.shield = true; this.emit({ t: 'shield', uid: t.uid, text: `リーダー能力：${this.unitLabel(t)}に盾` }); }
-      }
-    }
     for (const r of this.rules) {
-      if (r.type === 'bossPulse' && this.turn % r.every === 0) {
-        this.emit({ t: 'boss', side: 1, text: `ボスの力が放たれた！` });
+      if ((r.type === 'bossPulse' || r.type === 'enemyPulse') && this.turn % r.every === 0) {
+        this.emit({ t: 'boss', side: 1, text: r.type === 'bossPulse' ? 'ボスの力が放たれた！' : '相手の守護の力が広がった！' });
         for (const u of this.units(0)) this.damage(u, r.amount, { ignoreShield: false });
         this.resolveDeaths();
       }
@@ -908,11 +1053,13 @@ class Battle {
     const order = this.turn % 2 === 1 ? [0, 1] : [1, 0];
     for (const side of order) { this.deploy(side); if (this.checkEnd()) return this.flush(); }
 
-    // 号令の効果
-    for (const pl of this.p) {
-      if (pl.pending === 'charge') { this.units(pl.side).forEach(u => { u.tempAtk += 2; }); this.emit({ t: 'buff', side: pl.side, text: '総攻撃：味方全員の攻撃+2' }); }
-      if (pl.pending === 'guard') { this.units(pl.side).forEach(u => { u.shield = true; }); this.emit({ t: 'shield', side: pl.side, text: '守りの陣：味方全員に盾' }); }
-      pl.pending = null;
+    // ガーディアンの能力（予約した次ターンの配置後に発動）
+    for (const side of [0, 1]) {
+      const pl = this.p[side];
+      if (!pl.pendingGuardian && pl.autoGuardian) pl.pendingGuardian = this.chooseGuardianAction(side);
+      if (pl.pendingGuardian) this.executeGuardianAction(side, pl.pendingGuardian);
+      pl.pendingGuardian = null;
+      if (this.checkEnd()) return this.flush();
     }
 
     // 戦闘
@@ -929,7 +1076,7 @@ class Battle {
     }
     if (this.turn >= RULES.TURN_LIMIT) {
       const [a, b] = [this.p[0].hp, this.p[1].hp];
-      this.finish(a === b ? null : (a > b ? 0 : 1), '時間切れ：リーダーの体力で判定');
+      this.finish(a === b ? null : (a > b ? 0 : 1), '時間切れ：ガーディアンの体力で判定');
     }
     return this.flush();
   }
@@ -1063,7 +1210,7 @@ class Battle {
 
   makeUnit(side, c, slot, token = false) {
     const u = {
-      uid: this.uidSeq++, side, cardId: c.id, name: c.name, element: c.element || this.p[side].element,
+      uid: this.uidSeq++, side, cardId: c.id, name: c.name, element: c.element || '無',
       tribes: (c.tribes || []).slice(), atk: c.atk, hp: c.hp, maxHp: c.hp, speed: c.speed || 2,
       keywords: (c.keywords || []).slice(), ability: c.ability || null, skill: c.skill || '',
       shield: false, hidden: false, poison: 0, frozen: false, revived: false, tempAtk: 0,
@@ -1080,6 +1227,9 @@ class Battle {
     u.hidden = this.has(u, '潜伏');
     for (const r of this.rules) {
       if (r.type === 'tribeBuff' && u.tribes.includes(r.tribe)) { u.atk += r.atk; u.hp += r.hp; u.maxHp += r.hp; }
+    }
+    for (const e of pl.guardian.passive?.effects || []) {
+      if (e.type === 'elementPlayHp' && u.element === e.element) { u.hp += e.amount; u.maxHp += e.amount; }
     }
     this.p[side].board[slot.row][slot.lane] = u;
     return u;
@@ -1161,7 +1311,7 @@ class Battle {
     if (this.rules.some(r => r.type === 'nonFlyingAtkHalf') && !this.has(u, '飛行')) atk = Math.floor(atk / 2);
     const isLeader = target.leader !== undefined;
     this.emit({ t: 'attack', side: u.side, uid: u.uid, to: isLeader ? `leader${target.leader}` : target.uid,
-      text: `${this.unitLabel(u)}の攻撃 → ${isLeader ? `${SIDE_NAME[target.leader]}のリーダー` : target.name}` });
+      text: `${this.unitLabel(u)}の攻撃 → ${isLeader ? `${SIDE_NAME[target.leader]}のガーディアン` : target.name}` });
     if (u.hidden) { u.hidden = false; this.emit({ t: 'reveal', uid: u.uid, text: `${u.name}が姿を現した` }); }
     this.trigger(u, 'attack', { target: isLeader ? null : target });
     if (!this.alive(u)) { this.resolveDeaths(); return; }
@@ -1218,7 +1368,8 @@ class Battle {
     const pl = this.p[side];
     pl.hp -= n;
     this.stats.damageToLeader[side] += n;
-    this.emit({ t: 'leaderDamage', side, amount: n, text: `${label ? label + '：' : ''}${SIDE_NAME[side]}のリーダーに${n}ダメージ` });
+    this.gainGuardianGauge(side, n);
+    this.emit({ t: 'leaderDamage', side, amount: n, text: `${label ? label + '：' : ''}${SIDE_NAME[side]}のガーディアンに${n}ダメージ` });
     this.checkEnd();
   }
 
@@ -1235,17 +1386,14 @@ class Battle {
         this.p[u.side].board[u.row][u.lane] = null;
         u.onBoard = false;
         this.deathCount++;
+        this.gainGuardianGauge(u.side, 12);
+        this.gainGuardianGauge(1 - u.side, 10);
         this.emit({ t: 'death', side: u.side, uid: u.uid, row: u.row, lane: u.lane, text: `${this.unitLabel(u)}が倒れた` });
         this.trigger(u, 'death');
         this.triggerRelics(u.side, 'allyDeath', { victim: u });
         this.triggerRelics(1 - u.side, 'enemyDeath', { victim: u });
         for (const survivor of this.allUnits()) if (this.alive(survivor)) this.trigger(survivor, 'anyDeath', { victim: u });
         for (const side of [0, 1]) this.triggerRelics(side, 'anyDeath', { victim: u });
-        if (this.p[u.side].element === '火') this.damageLeader(1 - u.side, 1, null, 'リーダー能力');
-        if (this.p[1 - u.side].element === '闇') {
-          const t = this.rng.pick(this.units(1 - u.side));
-          if (t) { t.atk += 1; this.emit({ t: 'buff', uid: t.uid, text: `リーダー能力：${t.name}の攻撃+1` }); }
-        }
         if (this.over) return;
       }
     }
@@ -1268,9 +1416,9 @@ class Battle {
     }
     for (const side of [0, 1]) this.triggerRelics(side, 'turnEnd');
     for (const pl of this.p) {
-      if (pl.element === '水') {
-        const t = this.units(pl.side).filter(x => x.hp < x.maxHp).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
-        if (t) this.heal(t, 2);
+      for (const e of pl.guardian.passive?.effects || []) {
+        if (e.type !== 'turnEndStatus') continue;
+        this.applyEffect(this.guardianSource(pl.side), { type: 'status', target: e.target, status: e.status, amount: e.amount }, {});
       }
     }
     for (const r of this.rules) {
@@ -1279,7 +1427,13 @@ class Battle {
         if (list.length) { list.forEach(u => { u.poison += 1; }); this.emit({ t: 'rule', text: '霧の毒が全カードにしみこんだ' }); }
       }
     }
-    this.allUnits().forEach(u => { u.tempAtk = 0; });
+    this.allUnits().forEach(u => {
+      u.tempAtk = 0;
+      if (u.elementShiftTurns) {
+        u.elementShiftTurns--;
+        if (u.elementShiftTurns <= 0) { u.element = u.originalElement; delete u.originalElement; delete u.elementShiftTurns; }
+      }
+    });
     this.resolveDeaths();
   }
 
@@ -1329,7 +1483,7 @@ class Battle {
         if (e.target === 'leader') {
           const pl = this.p[side];
           const amt = Math.min(e.amount, pl.maxHp - pl.hp);
-          if (amt > 0) { pl.hp += amt; this.emit({ t: 'leaderHeal', side, amount: amt, text: `${SIDE_NAME[side]}のリーダーが${amt}回復` }); }
+          if (amt > 0) { pl.hp += amt; this.emit({ t: 'leaderHeal', side, amount: amt, text: `${SIDE_NAME[side]}のガーディアンが${amt}回復` }); }
           break;
         }
         pickTargets(e.target).forEach(t => this.heal(t, e.amount));
@@ -1354,9 +1508,10 @@ class Battle {
         const b = this.p[side].board;
         const lanes = [u.lane, u.lane - 1, u.lane + 1, 0, 1, 2].filter(l => l >= 0 && l < 3);
         let slot = null;
-        for (const row of ['front', 'back']) { for (const l of lanes) if (!b[row][l]) { slot = { row, lane: l }; break; } if (slot) break; }
+        const rows = e.token.prefer === 'back' ? ['back', 'front'] : ['front', 'back'];
+        for (const row of rows) { for (const l of lanes) if (!b[row][l]) { slot = { row, lane: l }; break; } if (slot) break; }
         if (!slot) break;
-        const tk = this.makeUnit(side, { id: 'token', name: e.token.name, atk: e.token.atk, hp: e.token.hp, keywords: e.token.keywords || [], speed: 2, hue: u.hue, shape: 0, tribes: u.tribes }, slot, true);
+        const tk = this.makeUnit(side, { id: 'token', name: e.token.name, atk: e.token.atk, hp: e.token.hp, element: e.token.element, keywords: e.token.keywords || [], speed: 2, hue: u.hue, shape: 0, tribes: u.tribes }, slot, true);
         this.emit({ t: 'play', side, uid: tk.uid, text: `「${tk.name}」が呼ばれた` });
         break;
       }
@@ -1376,8 +1531,8 @@ class Battle {
     if (this.over) return true;
     const [a, b] = [this.p[0].hp <= 0, this.p[1].hp <= 0];
     if (a && b) this.finish(null, '相打ち');
-    else if (a) this.finish(1, 'あなたのリーダーが倒れた');
-    else if (b) this.finish(0, '相手のリーダーを倒した');
+    else if (a) this.finish(1, 'あなたのガーディアンが倒れた');
+    else if (b) this.finish(0, '相手のガーディアンを倒した');
     return this.over;
   }
 
@@ -1399,7 +1554,7 @@ class Battle {
 // ---------------------------------------------------------------------
 // デッキの検証とおまかせ編成
 // ---------------------------------------------------------------------
-function validateDeck(deck, leader, rules = []) {
+function validateDeck(deck, rules = []) {
   const errors = [];
   if (deck.length < RULES.DECK_MIN || deck.length > RULES.DECK_SIZE) errors.push(`デッキは${RULES.DECK_MIN}〜${RULES.DECK_SIZE}枚にしてください（今は${deck.length}枚）`);
   const units = deck.filter(id => !isArtifact(id));
@@ -1408,7 +1563,6 @@ function validateDeck(deck, leader, rules = []) {
   if (arts > RULES.MAX_ARTIFACTS) errors.push(`アーティファクトは${RULES.MAX_ARTIFACTS}枚までです（今は${arts}枚）`);
   const els = new Set(units.map(id => CARD_MAP[id].element));
   if (els.size > RULES.MAX_ELEMENTS) errors.push(`属性は${RULES.MAX_ELEMENTS}種類までです（今は${els.size}種類）`);
-  if (!deck.includes(leader) || isArtifact(leader)) errors.push('リーダーはデッキのキャラカードから選んでください');
   for (const r of rules) {
     if (r.type === 'costLimit') {
       const over = deck.filter(id => getCard(id).cost > r.max);
@@ -1425,7 +1579,7 @@ function randomDeck(rng, rules = []) {
   const nArts = rng.int(RULES.MAX_ARTIFACTS + 1);
   const units = pool.slice(0, RULES.DECK_SIZE - nArts);
   const arts = rng.shuffle(ARTIFACTS.filter(a => a.cost <= limit).map(a => a.id)).slice(0, nArts);
-  return { deck: [...units, ...arts], leader: rng.pick(units), policy: rng.pick(Object.keys(POLICIES)) };
+  return { deck: [...units, ...arts], guardian: rng.pick(GUARDIANS).id, policy: rng.pick(Object.keys(POLICIES)), autoGuardian: true };
 }
 
 
@@ -2561,11 +2715,13 @@ async function boot() {
     await ImageStore.open();
     app.server = new GameServer();
     app.server.init();
+    const freshGuardians = app.server.newGuardianUnlocks();
     app.chars = app.server.characters;
     app.charMap = app.server.charMap;
     renderCoins();
     show('gacha');
     showLoginBonus(app.server.dailyLogin());
+    if (freshGuardians.length) setTimeout(() => toast(`守護者「${freshGuardians.map(g => g.name).join('・')}」が仲間になりました！`), 500);
     setInterval(tick, 1000);
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible' || !app.server) return;
@@ -2586,6 +2742,13 @@ if (typeof document !== 'undefined' && document.getElementById('main')) boot();
 // =====================================================================
 const elColor = el => (ELEMENTS[el] || {}).color || '#1E2A4A';
 
+function guardianArt(g, size, hidden = false) { return art(g, { rarity: 1, size, hidden }); }
+function guardianAbilitiesHtml(g) {
+  return `${g.passive ? `<div class="bc-sec"><h3>常時効果「${esc(g.passive.name)}」</h3>${esc(g.passive.text)}</div>` : ''}
+    ${g.skills.map(s => `<div class="bc-sec"><h3>スキル「${esc(s.name)}」 <small>残り${s.uses}回</small></h3>${esc(s.text)}</div>`).join('')}
+    <div class="bc-sec"><h3>必殺技「${esc(g.ultimate.name)}」 <small>ゲージ100</small></h3>${esc(g.ultimate.text)}</div>`;
+}
+
 function renderAdventure() {
   const main = $('#main');
   const sub = app.advSub || 'quest';
@@ -2594,12 +2757,39 @@ function renderAdventure() {
     <div class="adv-seg" role="tablist">
       <button data-sub="quest" aria-pressed="${sub === 'quest'}">クエスト</button>
       <button data-sub="deck" aria-pressed="${sub === 'deck'}">デッキ</button>
+      <button data-sub="guardian" aria-pressed="${sub === 'guardian'}">守護者</button>
       <button data-sub="daily" aria-pressed="${sub === 'daily'}">日課・探索${dailyCount ? `<span class="dotn">${dailyCount}</span>` : ''}</button>
     </div>
     <div id="advBody"></div>`;
   main.querySelectorAll('[data-sub]').forEach(b => { b.onclick = () => { app.advSub = b.dataset.sub; window.scrollTo(0, 0); renderAdventure(); }; });
   const box = $('#advBody');
-  ({ quest: renderQuestList, deck: renderDeckBuilder, daily: renderDaily })[sub](box);
+  ({ quest: renderQuestList, deck: renderDeckBuilder, guardian: renderGuardians, daily: renderDaily })[sub](box);
+}
+
+function renderGuardians(box) {
+  const s = app.server;
+  const visible = GUARDIANS.filter(g => g.unlock.type !== 'none');
+  box.innerHTML = `<section class="panel"><h2 style="margin:0 0 4px">守護者図鑑</h2><p class="small muted" style="margin:0">カードとは別に1体選び、専用HPと能力でバトルを支えます。</p></section>
+    <div class="zgrid">${visible.map((g, i) => { const unlocked = s.isGuardianUnlocked(g.id); return `<button class="zcell" data-guardian="${g.id}" ${unlocked ? '' : 'disabled'}>
+      <span class="no">Guardian No.${String(i + 1).padStart(3, '0')}</span>${guardianArt(g, 72, !unlocked)}
+      <span class="zname">${unlocked ? esc(g.name) : '？？？'}</span><span class="small muted">${unlocked ? `HP ${g.hp}` : esc(s.guardianUnlockText(g))}</span></button>`; }).join('')}</div>`;
+  box.querySelectorAll('[data-guardian]').forEach(b => { b.onclick = () => openGuardianDetail(b.dataset.guardian); });
+}
+
+function openGuardianDetail(id) {
+  const g = GUARDIAN_MAP[id];
+  if (!g || !app.server.isGuardianUnlocked(g.id)) return;
+  if (g.story && !STORIES[id]) {
+    openDialog('<p class="loading">守護者の記録を読み込み中…</p>');
+    loadStory(id).catch(() => { STORIES[id] = {}; toast('記録を読み込めませんでした'); }).then(() => openGuardianDetail(id));
+    return;
+  }
+  const stories = [1, 2, 3, 4, 5].map(r => {
+    const pairs = (STORIES[id] || {})[String(r)] || [];
+    return `<section class="zsec"><h3>${starsHtml(r)}</h3>${pairs.length ? zukanStoryPairsHtml(pairs) : '<p class="muted small">この段階の記録はまだありません。</p>'}</section>`;
+  }).join('');
+  openDialog(`<div class="zukan-page"><div class="zukan-hero"><div class="zukan-hero-media">${zukanHeroMediaHtml(g, 'base', '全身')}</div></div>
+    <div class="bigcard"><h2>${esc(g.name)}</h2><p class="muted">${esc(g.title)}　HP ${g.hp}</p>${guardianAbilitiesHtml(g)}</div>${stories}</div>`);
 }
 
 function deckChips(deck) {
@@ -2676,12 +2866,12 @@ function renderQuestList(box) {
   const d = s.deckState();
   const errors = s.deckErrors();
   const ownedCount = s.ownedCharIds().length;
-  const leader = CARD_MAP[d.leader];
+  const guardian = GUARDIAN_MAP[d.guardian];
 
   box.innerHTML = `
     <section class="panel">
       <div class="deck-head"><b>${d.deck.length}</b><span>/ ${RULES.DECK_SIZE}枚のデッキ</span>
-        ${leader ? `<span class="small muted" style="margin-left:auto">リーダー ${esc(leader.name)}・作戦「${POLICIES[d.policy].name}」</span>` : ''}</div>
+        ${guardian ? `<span class="small muted" style="margin-left:auto">守護者 ${esc(guardian.name)}・作戦「${POLICIES[d.policy].name}」</span>` : ''}</div>
       ${d.deck.length ? `<div class="deck-strip">${deckChips(d.deck)}</div>` : ''}
       ${ownedCount < RULES.DECK_MIN
         ? `<p class="small" style="margin:8px 0 0">カードとして使えるキャラが足りません（${ownedCount} / ${RULES.DECK_MIN}体）。ガチャで出会ったキャラは、図鑑に登録されるとカードとして使えます。</p>
@@ -2694,7 +2884,7 @@ function renderQuestList(box) {
     </section>
     <details class="panel">
       <summary><b>バトルの遊び方</b></summary>
-      <p class="small" style="margin:6px 0 0">バトルは自動で進みます。毎ターンエナジーが増え、作戦に従ってカードが場に出ます。前列は正面の敵と戦い、後列は射程や飛行があると攻撃できます。空いた列からは相手のリーダーを攻撃でき、体力を0にすれば勝ちです。<br>観戦中の「号令」は1バトル2回まで。<br>★3で型を選べて、★4で縁、★5で奥義が使えるようになります。代表個体に称号があると、小さなオマケが付きます。</p>
+      <p class="small" style="margin:6px 0 0">バトルは自動で進みます。守護者のスキルを予約すると次のターンに発動します。必殺技はゲージ100で1バトルに1回だけ使えます。前列と後列の戦い方、★3の型・★4の縁・★5の奥義はこれまでどおりです。</p>
     </details>
     ${QUESTS.map(q => {
       const st = s.questStatus(q.id);
@@ -2723,22 +2913,22 @@ function openQuest(id) {
   const st = s.questStatus(id);
   const d = s.deckState();
   const errors = s.deckErrors(q.rules);
-  const lead = CARD_MAP[q.enemy.leader];
-  const myLead = CARD_MAP[d.leader];
+  const enemyGuardian = GUARDIAN_MAP[q.enemy.guardian];
+  const myGuardian = GUARDIAN_MAP[d.guardian];
   const body = openDialog(`
     <h2 style="margin:0">${esc(q.name)}</h2>
     <p class="muted small" style="margin:2px 0 10px">${esc(q.story)}</p>
     <div class="panel" style="background:#fff;display:flex;gap:10px;align-items:center">
-      ${art(app.charMap[lead.id], { rarity: 1, size: 56 })}
-      <div><b>${esc(q.enemy.name)}</b><br><span class="small">リーダー体力 ${q.enemy.hp}　作戦「${POLICIES[q.enemy.policy].name}」${q.enemy.ultimates ? '　奥義あり' : ''}</span><br>
-      <span class="chip" style="--el:${elColor(lead.element)}">${lead.element}</span> <span class="small">${ELEMENTS[lead.element].leader}</span></div>
+      ${guardianArt(enemyGuardian, 64)}
+      <div><b>${esc(q.enemy.name)}</b><br><span class="small">守護者：${esc(enemyGuardian.name)}　HP ${q.enemy.guardianHp || enemyGuardian.hp}<br>作戦「${POLICIES[q.enemy.policy].name}」</span><br>
+      <span class="small muted">${esc(enemyGuardian.passive?.text || enemyGuardian.title)}</span></div>
     </div>
     ${q.rules.length || q.goalTurns ? `<div style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px">${q.rules.map(r => `<span class="chip rule">${esc(ruleText(r))}</span>`).join('')}${q.goalTurns ? `<span class="chip rule">勝利条件：${q.goalTurns}ターン以内に勝つ</span>` : ''}</div>` : ''}
     <div class="quest-reward" style="margin:0 0 10px">${st.cleared
       ? (st.dailyLeft ? `<span>勝利 +${num(q.reward.repeat)}コイン（今日あと${st.dailyLeft}回）</span>` : '<span>今日の報酬は受け取り済み（練習はできます）</span>')
       : `<span>初回クリア +${num(q.reward.first)}コイン</span>`}</div>
     <div class="panel" style="background:#fff">
-      <b>あなたのデッキ</b>${myLead ? `<span class="small">　リーダー：${esc(myLead.name)}（${myLead.element}）　作戦「${POLICIES[d.policy].name}」</span>` : ''}
+      <b>あなたのデッキ</b>${myGuardian ? `<span class="small">　守護者：${esc(myGuardian.name)}　作戦「${POLICIES[d.policy].name}」</span>` : ''}
       <div class="deck-strip">${deckChips(d.deck)}</div>
       ${errors.length ? `<ul class="errors">${errors.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
     </div>
@@ -2766,7 +2956,8 @@ function renderDeckBuilder(box) {
   const artCount = d.deck.length - units.length;
   const elCount = {};
   units.forEach(id => { const e = CARD_MAP[id].element; elCount[e] = (elCount[e] || 0) + 1; });
-  const leader = CARD_MAP[d.leader];
+  const guardian = GUARDIAN_MAP[d.guardian];
+  const guardianChoices = GUARDIANS.filter(g => g.unlock.type !== 'none');
   const showArts = !app.deckFilter || app.deckFilter === '__art';
   const pool = app.deckFilter === '__art' ? [] : owned.map(id => CARD_MAP[id]).filter(c => !app.deckFilter || c.element === app.deckFilter).sort((a, b) => a.cost - b.cost || a.id.localeCompare(b.id));
   const ownedArts = s.ownedArtifacts();
@@ -2777,10 +2968,11 @@ function renderDeckBuilder(box) {
         <span style="margin-left:auto;display:flex;gap:3px;flex-wrap:wrap">${Object.entries(elCount).map(([e, n]) => `<span class="chip" style="--el:${elColor(e)}">${e} ${n}</span>`).join('')}</span></div>
       <div class="curve">${curve.map(n => `<div style="height:${n / maxC * 100}%"></div>`).join('')}</div>
       <div class="curve-labels">${curve.map((n, i) => `<span>${i + 1}${i === 7 ? '+' : ''}</span>`).join('')}</div>
-      <label class="field">リーダー
-        <select id="leaderSel">${units.length ? units.map(id => `<option value="${id}" ${id === d.leader ? 'selected' : ''}>${esc(CARD_MAP[id].name)}（${CARD_MAP[id].element}）</option>`).join('') : '<option>デッキにカードを入れてください</option>'}</select>
-        ${leader ? `<span class="muted" style="font-weight:500">リーダー能力：${ELEMENTS[leader.element].leader}</span>` : ''}
+      <label class="field">守護者
+        <select id="guardianSel">${guardianChoices.map(g => `<option value="${g.id}" ${g.id === d.guardian ? 'selected' : ''} ${s.isGuardianUnlocked(g.id) ? '' : 'disabled'}>${s.isGuardianUnlocked(g.id) ? esc(g.name) : '？？？（' + esc(s.guardianUnlockText(g)) + '）'}</option>`).join('')}</select>
+        ${guardian ? `<span class="muted" style="font-weight:500;display:flex;align-items:center;gap:8px">${guardianArt(guardian, 48)}<span>HP ${guardian.hp}<br>${esc(guardian.passive?.text || guardian.title)}</span></span>` : ''}
       </label>
+      ${guardian ? `<div class="small" style="margin:-4px 0 10px">${guardian.skills.map(s => `<b>${esc(s.name)}</b>（${s.uses}回）：${esc(s.text)}`).join('<br>')}<br><b>${esc(guardian.ultimate.name)}</b>：${esc(guardian.ultimate.text)}</div>` : ''}
       <div class="field">作戦
         <div class="seg">${Object.entries(POLICIES).map(([k, p]) => `<button data-policy="${k}" aria-pressed="${k === d.policy}">${p.name}</button>`).join('')}</div>
         <span class="muted" style="font-weight:500">${POLICIES[d.policy].desc}</span>
@@ -2817,8 +3009,8 @@ function renderDeckBuilder(box) {
         <p class="small muted" style="margin:0 0 6px">コインを使って、新しいアーティファクトを作れます。</p>
         <div class="pool">${ARTIFACTS.filter(a => !ownedArts.includes(a.id)).map(a => artifactMini(a, { owned: false })).join('')}</div>` : ''}` : ''}`;
 
-  const sel = box.querySelector('#leaderSel');
-  if (sel && units.length) sel.onchange = e => { s.setDeck({ leader: e.target.value }); renderAdventure(); };
+  const sel = box.querySelector('#guardianSel');
+  if (sel) sel.onchange = e => { s.setDeck({ guardian: e.target.value }); renderAdventure(); };
   box.querySelectorAll('[data-policy]').forEach(b => { b.onclick = () => { s.setDeck({ policy: b.dataset.policy }); renderAdventure(); }; });
   box.querySelector('#autoDeck2').onclick = () => { s.autoDeck(); toast('手持ちのキャラでデッキを組みました'); renderAdventure(); };
   box.querySelector('#clearDeck').onclick = () => { s.setDeck({ deck: [] }); renderAdventure(); };
@@ -2873,7 +3065,6 @@ function cardDetailHtml(id, { showImage = true } = {}) {
       ${c.costRule && c.costRule.type === 'perDeath' ? `<div class="bc-sec"><h3>コスト変化</h3>場のカードが1体倒れるごとにコスト−${c.costRule.amount}（最低${c.costRule.min}）</div>` : ''}
       ${bonds.length ? `<div class="bc-sec"><h3>縁（★4で使える）</h3>${bonds.map(b => `「${esc(b.name)}」：${esc(CARD_MAP[b.partner].name)}と一緒に場にいると、2体とも攻撃+1・体力+1`).join('<br>')}</div>` : ''}
       <div class="bc-sec"><h3>奥義（★5で使える）</h3>「${esc(ult.name)}」登場時に1回：${esc(ultimateEffectText(ult))}</div>
-      <div class="bc-sec"><h3>リーダーにしたとき（${c.element}）</h3>${ELEMENTS[c.element].leader}</div>
       <div class="bc-sec small muted">自動計算：点数 ${c.points.budget}（コスト×2+3）− キーワード ${c.points.keywords} − 固有能力 ${c.points.ability} → 攻撃${c.atk}・体力${c.hp}</div>
     </div>
     <button class="btn ${inDeck ? '' : 'primary'} wide" id="toggleCard" style="margin-top:10px">${inDeck ? 'デッキから外す' : 'デッキに入れる'}</button>`;
@@ -2901,7 +3092,7 @@ function mountCardDetail(root, id, { refresh = null, closeAfterToggle = false, s
     try {
       const next = inDeck ? d.deck.filter(x => x !== id) : [...d.deck, id];
       if (!inDeck && next.length > RULES.DECK_SIZE) { toast(`デッキは${RULES.DECK_SIZE}枚までです`); return; }
-      s.setDeck({ deck: next, leader: d.leader || id });
+      s.setDeck({ deck: next });
       if (closeAfterToggle) {
         closeDialog();
         if (app.tab === 'adventure') renderAdventure();
@@ -2918,12 +3109,13 @@ function openCardDetail(id) {
 // ---------------------------------------------------------------------
 // バトル観戦
 // ---------------------------------------------------------------------
-const BATTLE_DELAYS = { start: 300, turn: 750, play: 420, attack: 380, damage: 260, block: 320, heal: 260, buff: 260, status: 260, shield: 280, ability: 700, bond: 900, death: 360, revive: 520, leaderDamage: 360, leaderHeal: 300, command: 650, frozen: 380, counter: 260, reveal: 220, poison: 260, info: 180, rule: 550, boss: 800, end: 200 };
+const BATTLE_DELAYS = { start: 300, turn: 750, play: 420, attack: 380, damage: 260, block: 320, heal: 260, buff: 260, status: 260, shield: 280, ability: 700, bond: 900, death: 360, revive: 520, leaderDamage: 360, leaderHeal: 300, guardian: 850, frozen: 380, counter: 260, reveal: 220, poison: 260, info: 180, rule: 550, boss: 800, end: 200 };
 
 function startBattle(q) {
   let battle;
   try { battle = app.server.createQuestBattle(q.id); } catch (e) { toast(e.message); return; }
-  const view = { q, battle, speed: app.battleSpeed || 1, skipping: false, pendingCmd: null, log: [], closed: false };
+  const view = { q, battle, speed: app.battleSpeed || 1, skipping: false, pendingAction: null, log: [], closed: false };
+  const guardian = battle.p[0].guardian;
   const el = document.createElement('div');
   el.className = 'battle';
   el.setAttribute('role', 'dialog');
@@ -2946,7 +3138,8 @@ function startBattle(q) {
       <div class="leader" id="leader0"></div>
     </div>
     <div class="b-bottom">
-      ${Object.entries(COMMANDS).map(([k, c]) => `<button class="cmd" data-cmd="${k}" aria-pressed="false">${c.name}<small>${c.desc}</small></button>`).join('')}
+      ${guardian.skills.map((skill, i) => `<button class="cmd" data-action="skill${i}" aria-pressed="false">${esc(skill.name)}<small>${esc(skill.text)}</small></button>`).join('')}
+      <button class="cmd" data-action="ultimate" aria-pressed="false">${esc(guardian.ultimate.name)}<small>ゲージ100で発動</small></button>
       <button class="logbtn" id="bLog">記録</button>
     </div>`;
   document.body.appendChild(el);
@@ -2960,12 +3153,12 @@ function startBattle(q) {
     b.onclick = () => { view.speed = app.battleSpeed = Number(b.dataset.spd); el.querySelectorAll('[data-spd]').forEach(x => x.setAttribute('aria-pressed', x === b)); };
   });
   el.querySelector('[data-skip]').onclick = () => { view.skipping = true; };
-  el.querySelectorAll('[data-cmd]').forEach(b => {
+  el.querySelectorAll('[data-action]').forEach(b => {
     b.onclick = () => {
-      if (battle.p[0].commandsLeft <= 0 || battle.over) return;
-      view.pendingCmd = view.pendingCmd === b.dataset.cmd ? null : b.dataset.cmd;
+      if (!battle.guardianActionAvailable(0, b.dataset.action) || battle.over) return;
+      view.pendingAction = view.pendingAction === b.dataset.action ? null : b.dataset.action;
       Sound.click();
-      updateCmdButtons(view);
+      updateGuardianButtons(view);
     };
   });
   el.querySelector('#bLog').onclick = () => openBattleLog(view);
@@ -2976,28 +3169,31 @@ function startBattle(q) {
   runBattle(view);
 }
 
-function updateCmdButtons(view) {
-  const left = view.battle.p[0].commandsLeft;
-  view.el.querySelectorAll('[data-cmd]').forEach(b => {
-    const on = view.pendingCmd === b.dataset.cmd;
+function updateGuardianButtons(view) {
+  const pl = view.battle.p[0];
+  view.el.querySelectorAll('[data-action]').forEach(b => {
+    const action = b.dataset.action;
+    const on = view.pendingAction === action;
     b.setAttribute('aria-pressed', on);
-    b.disabled = left <= 0 || view.battle.over;
-    b.querySelector('small').textContent = on ? '次のターンに発動' : `${COMMANDS[b.dataset.cmd].desc}（残り${left}回）`;
+    b.disabled = !view.battle.guardianActionAvailable(0, action) || view.battle.over;
+    if (on) b.querySelector('small').textContent = '次のターンに発動';
+    else if (action === 'ultimate') b.querySelector('small').textContent = pl.guardianUltimateUsed ? '使用済み' : `ゲージ ${pl.guardianGauge}/100`;
+    else { const i = Number(action.slice(-1)); b.querySelector('small').textContent = `${pl.guardian.skills[i].text}（残り${pl.guardianSkillUses[i]}回）`; }
   });
 }
 
 async function runBattle(view) {
   const { battle } = view;
   let queue = battle.start();
-  updateCmdButtons(view);
+  updateGuardianButtons(view);
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   while (!view.closed) {
     if (!queue.length) {
       if (battle.over) break;
-      const cmd = view.pendingCmd;
-      view.pendingCmd = null;
-      queue = battle.nextTurn({ 0: cmd });
-      updateCmdButtons(view);
+      const action = view.pendingAction;
+      view.pendingAction = null;
+      queue = battle.nextTurn({ 0: action });
+      updateGuardianButtons(view);
       continue;
     }
     while (view.paused && !view.closed && !view.skipping) await sleep(120);
@@ -3111,13 +3307,12 @@ function renderBattleSnap(view, snap, enteringUid) {
     const L = el.querySelector(`#leader${side}`);
     const hpNow = Math.max(0, sn.hp);
     const pct = hpNow / sn.maxHp * 100;
-    const leaderRarity = side === 0 ? app.server.maxRarity(pl.leader.id) : 1;
     const floats = [...L.querySelectorAll('.float')];
     const relics = (sn.relics || []).map(r => `<span class="relic" title="${esc(r.name)}">${r.icon}<small>${esc(r.name)}</small></span>`).join('');
-    L.innerHTML = `${art(app.charMap[pl.leader.id], { rarity: leaderRarity, size: 36 })}
-      <div class="l-main"><div class="l-name">${esc(pl.name)} <span class="chip" style="--el:${elColor(pl.element)}">${pl.element}</span></div>
+    L.innerHTML = `${guardianArt(pl.guardian, 42)}
+      <div class="l-main"><div class="l-name">${esc(pl.name)}・${esc(pl.guardian.name)}</div>
       <div class="l-hpbar"><i class="${pct <= 30 ? 'low' : ''}" style="width:${pct}%"></i></div>
-      <div class="l-meta">エナジー ${sn.energy}　手札 ${sn.hand}　山札 ${sn.deck}</div>
+      <div class="l-meta">${pl.guardian.passive ? `常時「${esc(pl.guardian.passive.name)}」　` : ''}ゲージ ${sn.guardianGauge}/100　エナジー ${sn.energy}　手札 ${sn.hand}　山札 ${sn.deck}</div>
       ${relics ? `<div class="relics">${relics}</div>` : ''}</div>
       <span class="l-hp"><small>HP</small>${hpNow}<small>/${sn.maxHp}</small></span>`;
     const pill = el.querySelector(`#hpPill${side}`);
@@ -3184,6 +3379,7 @@ function showBattleEvent(view, ev) {
       if (!quiet) { if (ev.ultimate) { Sound.rare(5); vibrate(60); } else Sound.up(); }
       break;
     }
+    case 'guardian': battleBanner(view, `${ev.ultimate ? '必殺技' : 'スキル'}<small>${esc(ev.text)}</small>`, ev.ultimate ? 'bond' : '', ev.ultimate ? 1100 : 850); if (!quiet) ev.ultimate ? Sound.rare(5) : Sound.up(); break;
     case 'bond': battleBanner(view, `縁<small>${esc(ev.text)}</small>`, 'bond', 1000); if (!quiet) Sound.rare(4); break;
     case 'artifact': battleBanner(view, `<span class="b-icon">${ev.icon}</span>${esc(ev.text.split('：')[0])}<small>${esc(ev.text.split('：').slice(1).join('：'))}</small>`, 'artifact', 900); if (!quiet) Sound.up(); break;
     case 'relic': {
@@ -3192,7 +3388,6 @@ function showBattleEvent(view, ev) {
       if (!quiet) Sound.click();
       break;
     }
-    case 'command': battleBanner(view, esc(ev.text), '', 800); break;
     case 'boss': case 'rule': battleBanner(view, esc(ev.text), '', 800); break;
   }
 }
@@ -3203,6 +3398,7 @@ function showBattleResult(view) {
   let reward = { gained: 0 };
   try { reward = app.server.finishQuest(view.q.id, b); } catch (e) { toast(e.message); }
   if (reward.gained) { renderCoins(true); Sound.coin(); }
+  if (reward.guardians?.length) setTimeout(() => toast(`守護者「${reward.guardians.map(g => g.name).join('・')}」が仲間になりました！`), 300);
   if (win) { Sound.rare(5); vibrate([40, 30, 80]); }
   updateBadges();
   const rewardText = !win ? 'デッキや作戦を変えて、もう一度挑戦してみましょう。'
@@ -3277,7 +3473,7 @@ function openSim() {
 
 function runSim(total) {
   const rng = new Rng(Date.now() % 1e9);
-  const r = app.sim = { total, done: 0, turns: 0, first: 0, draws: 0, card: {}, kw: {}, el: {}, art: {}, running: true };
+  const r = app.sim = { total, done: 0, turns: 0, first: 0, draws: 0, card: {}, kw: {}, guardian: {}, art: {}, running: true };
   const add = (map, key, won) => { const v = map[key] || (map[key] = { g: 0, w: 0 }); v.g++; if (won) v.w++; };
   const step = () => {
     if (app.sim !== r) return;
@@ -3294,7 +3490,7 @@ function runSim(total) {
           if (isArtifact(id)) { add(r.art, id, won); return; }
           add(r.card, id, won); CARD_MAP[id].keywords.forEach(k => add(r.kw, k, won));
         });
-        add(r.el, CARD_MAP[d.leader].element, won);
+        add(r.guardian, d.guardian, won);
       });
     }
     const bar = $('#simBar'), txt = $('#simText');
@@ -3324,7 +3520,7 @@ function simResultHtml(r) {
       <div>引き分け<b>${(r.draws / games * 100).toFixed(1)}%</b></div>
     </div>
     <p class="small muted" style="margin:0 0 8px">赤い数字は56%以上（強すぎるかも）、青い数字は44%以下（弱すぎるかも）。</p>
-    <h3 style="font-size:14px;margin:10px 0 4px">リーダーの属性</h3><table class="wr">${rows(r.el, k => `<span class="chip" style="--el:${elColor(k)}">${k}</span>`)}</table>
+    <h3 style="font-size:14px;margin:10px 0 4px">ガーディアン</h3><table class="wr">${rows(r.guardian, k => esc(GUARDIAN_MAP[k].name))}</table>
     <h3 style="font-size:14px;margin:10px 0 4px">キーワード</h3><table class="wr">${rows(r.kw, k => esc(k))}</table>
     <h3 style="font-size:14px;margin:10px 0 4px">アーティファクト</h3><table class="wr">${rows(r.art || {}, k => `${ARTIFACT_MAP[k].icon} ${esc(ARTIFACT_MAP[k].name)}`)}</table>
     <h3 style="font-size:14px;margin:10px 0 4px">カード</h3><table class="wr">${rows(r.card, k => `<span class="chip" style="--el:${elColor(CARD_MAP[k].element)}">${CARD_MAP[k].element}</span> ${esc(CARD_MAP[k].name)}`)}</table>`;

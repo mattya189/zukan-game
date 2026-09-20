@@ -508,7 +508,7 @@ dialog.confirm { width: min(380px, calc(100vw - 40px)); }
 .banner.bond { border-color: #FF9EC4; }
 @keyframes pop { from { transform: translate(-50%, -50%) scale(.7); opacity: 0; } }
 
-.b-bottom { padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); max-width: 520px; width: 100%; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; }
+.b-bottom { padding: 6px 10px calc(8px + env(safe-area-inset-bottom)); max-width: 520px; width: 100%; margin: 0 auto; display: grid; grid-template-columns: repeat(3, minmax(0,1fr)) auto; gap: 6px; }
 .b-bottom .cmd { background: rgba(255,255,255,.1); color: var(--paper); border: 1.5px solid rgba(255,255,255,.35); border-radius: 10px; padding: 5px 4px; font-weight: 900; font-size: 13px; line-height: 1.2; }
 .b-bottom .cmd small { display: block; font-weight: 500; font-size: 10px; color: #B9C3DA; }
 .b-bottom .cmd[aria-pressed="true"] { background: var(--yellow); color: var(--ink); border-color: var(--yellow); }
@@ -554,7 +554,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 .chip { display: inline-block; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 99px; background: var(--el, var(--ink)); color: #fff; white-space: nowrap; line-height: 1.6; }
 .chip.soft { background: #E3E8F0; color: var(--ink); }
 .chip.rule { background: #FFF1C9; color: var(--ink); border: 1px solid var(--gold); border-radius: 6px; white-space: normal; font-size: 12px; padding: 2px 8px; }
-.adv-seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; background: var(--paper); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
+.adv-seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: var(--paper); border-radius: 12px; padding: 4px; margin-bottom: 12px; }
 .adv-seg button { position: relative; border: 0; background: none; border-radius: 9px; padding: 6px 0; font-weight: 700; color: var(--ink-soft); }
 .adv-seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .adv-seg .dotn { position: absolute; top: 2px; right: 8px; min-width: 16px; height: 16px; border-radius: 99px; background: var(--red); color: #fff; font-size: 10px; line-height: 16px; font-family: var(--dot); padding: 0 4px; }
@@ -694,7 +694,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/characters.js', 'data/artifacts.js', 'data/quests.js', 'data/rules.js', 'js/game.js'];
+  var files = ['data/characters.js', 'data/guardians.js', 'data/artifacts.js', 'data/quests.js', 'data/rules.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;

@@ -188,14 +188,11 @@ const RULES = {
   DECK_MIN: 8,          // デッキの最小枚数（序盤のプレイヤー向け）
   DECK_SIZE: 20,        // デッキの最大枚数
   MAX_ELEMENTS: 3,      // キャラカードの属性は3種類まで
-  LEADER_HP: 70,
   START_HAND: 4,
   MAX_ENERGY: 10,
   HAND_MAX: 7,
-  TURN_LIMIT: 20,       // これを超えたらリーダーの残りHPで判定
-  FATIGUE_DAMAGE: 2,    // 山札が切れたあと、引くたびにリーダーが受けるダメージ
-  EARTH_HP_BONUS: 22,   // 土のリーダー能力で増えるHP
-  COMMANDS: 2,
+  TURN_LIMIT: 20,       // これを超えたらガーディアンの残りHPで判定
+  FATIGUE_DAMAGE: 2,    // 山札が切れたあと、引くたびにガーディアンが受けるダメージ
   LANES: 3
 };
 
@@ -203,12 +200,12 @@ const RULES = {
 // 属性
 // ---------------------------------------------------------------------
 const ELEMENTS = {
-  '火': { color: '#E4572E', speed: 3, leader: '味方のカードが倒れるたび、敵リーダーに1ダメージ' },
-  '水': { color: '#2E86DE', speed: 2, leader: 'ターン終了時、一番弱っている味方を2回復' },
-  '風': { color: '#1FA38A', speed: 3, leader: '飛行を持つ味方の攻撃+1' },
-  '土': { color: '#9A6B3F', speed: 1, leader: 'リーダーの体力+22' },
-  '光': { color: '#D9A300', speed: 3, leader: '4ターンごとに、ランダムな味方に盾' },
-  '闇': { color: '#7050A8', speed: 2, leader: '敵のカードが倒れるたび、ランダムな味方の攻撃+1' }
+  '火': { color: '#E4572E', speed: 3 },
+  '水': { color: '#2E86DE', speed: 2 },
+  '風': { color: '#1FA38A', speed: 3 },
+  '土': { color: '#9A6B3F', speed: 1 },
+  '光': { color: '#D9A300', speed: 3 },
+  '闇': { color: '#7050A8', speed: 2 }
 };
 
 // ---------------------------------------------------------------------
@@ -218,8 +215,8 @@ const KEYWORDS = {
   '守護': { pts: 0.5, desc: '近くの列の敵は、このカードを優先して攻撃する' },
   '先制': { pts: 1.0, desc: '速さに関係なく、ターンの最初に行動する' },
   '連撃': { pts: 2.5, desc: '1ターンに2回攻撃する' },
-  '飛行': { pts: 2.6, desc: '前列と守護を飛び越えて、後列かリーダーを攻撃する' },
-  '貫通': { pts: 1.0, desc: '倒して余ったダメージを、後ろのカードかリーダーに与える' },
+  '飛行': { pts: 2.6, desc: '前列と守護を飛び越えて、後列かガーディアンを攻撃する' },
+  '貫通': { pts: 1.0, desc: '倒して余ったダメージを、後ろのカードかガーディアンに与える' },
   '反撃': { pts: 0.8, desc: '攻撃を受けて生き残ったら、相手にやり返す' },
   '射程': { pts: 1.0, desc: '後列からでも攻撃できる' },
   '潜伏': { pts: 1.0, desc: '自分が攻撃するまで、狙われない' },
@@ -247,8 +244,8 @@ const TRIGGERS = {
 };
 
 const TARGET_WORDS = {
-  randomEnemy: 'ランダムな敵', allEnemies: '敵全体', enemyLeader: '敵リーダー', attackTarget: '攻撃した相手', laneEnemy: '正面の敵',
-  lowestAlly: '一番弱っている味方', allAllies: '味方全体', leader: '自分のリーダー', self: '自分', playedAlly: 'その味方', randomAlly: 'ランダムな味方', tribeAllies: '味方の{tribe}'
+  randomEnemy: 'ランダムな敵', allEnemies: '敵全体', enemyLeader: '敵ガーディアン', attackTarget: '攻撃した相手', laneEnemy: '正面の敵',
+  lowestAlly: '一番弱っている味方', allAllies: '味方全体', leader: '自分のガーディアン', self: '自分', playedAlly: 'その味方', randomAlly: 'ランダムな味方', tribeAllies: '味方の{tribe}'
 };
 
 function conditionText(c) {
@@ -341,16 +338,10 @@ const bondsOf = id => BONDS.filter(b => b.a === id || b.b === id).map(b => ({ ..
 // 作戦
 // ---------------------------------------------------------------------
 const POLICIES = {
-  attack: { name: '攻め', desc: '安いカードから次々に出し、空いている列からリーダーを狙う' },
+  attack: { name: '攻め', desc: '安いカードから次々に出し、空いている列からガーディアンを狙う' },
   defend: { name: '守り', desc: '守護や体力の高いカードを優先し、敵の強い列をふさぐ' },
   big:    { name: 'じっくり', desc: 'コストの高いカードを優先して出す' }
 };
-
-const COMMANDS = {
-  charge: { name: '総攻撃', desc: '次のターン、味方全員の攻撃+2' },
-  guard:  { name: '守りの陣', desc: '次のターン、味方全員に盾' }
-};
-
 
 function ruleText(r) {
   switch (r.type) {
@@ -360,6 +351,7 @@ function ruleText(r) {
     case 'nonFlyingAtkHalf': return '強風：飛行を持たないカードは攻撃が半分';
     case 'costLimit': return `編成制限：コスト${r.max}以下のカードのみ`;
     case 'bossPulse': return `ボスの力：${r.every}ターンごとに、あなたの全カードへ${r.amount}ダメージ`;
+    case 'enemyPulse': return `守護の波動：${r.every}ターンごとに、あなたの全カードへ${r.amount}ダメージ`;
     default: return '';
   }
 }

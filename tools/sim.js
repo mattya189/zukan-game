@@ -11,7 +11,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const files = ['data/characters.js', 'data/artifacts.js', 'data/quests.js', 'data/rules.js', 'js/game.js'];
+const files = ['data/characters.js', 'data/guardians.js', 'data/artifacts.js', 'data/quests.js', 'data/rules.js', 'js/game.js'];
 const src = files.map(f => fs.readFileSync(path.join(root, f), 'utf8')).join('\n');
 
 // ブラウザの代わりになる最低限の部品
@@ -22,7 +22,7 @@ global.localStorage = {
   removeItem: k => { delete store[k]; }
 };
 const runInGlobal = eval;   // グローバルで読み込む（変数名の衝突を避ける）
-const api = runInGlobal(src + '\n;({ GameServer, Battle, CARDS, CARD_MAP, ARTIFACT_MAP, QUESTS, TITLES, titlesOf, randomDeck, Rng, RULES, CHARACTERS, generateIndividual, isArtifact, powerChance, ratioChance })');
+const api = runInGlobal(src + '\n;({ GameServer, Battle, CARDS, CARD_MAP, GUARDIANS, GUARDIAN_MAP, ARTIFACT_MAP, QUESTS, TITLES, titlesOf, randomDeck, Rng, RULES, CHARACTERS, generateIndividual, isArtifact, powerChance, ratioChance })');
 const { GameServer, Battle, CARD_MAP, QUESTS, TITLES, titlesOf, randomDeck, Rng, RULES, CHARACTERS, generateIndividual, isArtifact } = api;
 
 const pct = (a, b) => `${(a / b * 100).toFixed(1)}%`;
@@ -31,7 +31,7 @@ const line = s => console.log(s);
 function battles(n = 4000) {
   line(`\n■ ランダムなデッキ同士の対戦（${n}戦）`);
   const rng = new Rng(12345);
-  const card = {}, kw = {}, el = {}, art = {};
+  const card = {}, kw = {}, guardian = {}, art = {};
   let turns = 0, first = 0, draws = 0;
   const add = (m, k, w) => { const v = m[k] || (m[k] = { g: 0, w: 0 }); v.g++; if (w) v.w++; };
   for (let i = 0; i < n; i++) {
@@ -47,7 +47,7 @@ function battles(n = 4000) {
         add(card, id, won);
         CARD_MAP[id].keywords.forEach(k => add(kw, k, won));
       });
-      add(el, CARD_MAP[d.leader].element, won);
+      add(guardian, d.guardian, won);
     });
   }
   line(`平均ターン ${(turns / n).toFixed(1)}／先攻の勝率 ${pct(first, n - draws)}／引き分け ${pct(draws, n)}`);
@@ -56,7 +56,7 @@ function battles(n = 4000) {
     line(`\n[${title}] 勝率が50%から離れているものほど要調整`);
     rows.forEach(x => { const mark = x.r >= 56 ? ' ←強すぎ?' : x.r <= 44 ? ' ←弱すぎ?' : ''; line(`  ${name(x.k).padEnd(12, '　')} ${x.r.toFixed(1)}%${mark}`); });
   };
-  show('リーダーの属性', el, k => k);
+  show('ガーディアン', guardian, k => api.GUARDIAN_MAP[k].name);
   show('キーワード', kw, k => k);
   show('アーティファクト', art, k => api.ARTIFACT_MAP[k].name);
   show('カード', card, k => CARD_MAP[k].name);
@@ -65,7 +65,11 @@ function battles(n = 4000) {
 function quests(n = 150) {
   line(`\n■ クエストの勝率（おまかせデッキ、各${n}戦×10人分の手持ち）`);
   const tot = {};
+  const questRng = new Rng(24681357);
+  const originalRandom = Math.random;
+  Math.random = () => questRng.next();
   for (let seed = 0; seed < 10; seed++) {
+    Object.keys(store).forEach(k => { delete store[k]; });
     const g = new GameServer();
     g.init();
     g.debugAddCoins(200000);
@@ -75,6 +79,7 @@ function quests(n = 150) {
       if (g.deckErrors(q.rules).length) continue;
       for (let i = 0; i < n / 10; i++) {
         const b = g.createQuestBattle(q.id);
+        b.p[0].autoGuardian = true;
         b.start();
         while (!b.over) b.nextTurn();
         const t = tot[q.name] = tot[q.name] || { w: 0, n: 0, turns: 0 };
@@ -83,6 +88,7 @@ function quests(n = 150) {
       }
     }
   }
+  Math.random = originalRandom;
   Object.entries(tot).forEach(([k, v]) => line(`  ${k.padEnd(14, '　')} 勝率 ${pct(v.w, v.n)}／平均 ${(v.turns / v.n).toFixed(1)}ターン`));
   line('  目安：Lv1は8〜9割、Lv2は5〜6割、Lv3は4〜5割、ボスは1〜2割');
 }
@@ -108,7 +114,7 @@ function overview() {
   line('■ いまの内容');
   line(`  キャラ ${CHARACTERS.length}体／アーティファクト ${Object.keys(api.ARTIFACT_MAP).length}種／クエスト ${QUESTS.length}件`);
   line(`  デッキ ${RULES.DECK_MIN}〜${RULES.DECK_SIZE}枚（属性${RULES.MAX_ELEMENTS}種まで、道具${RULES.MAX_ARTIFACTS}枚まで）`);
-  line(`  リーダー体力 ${RULES.LEADER_HP}／初期手札 ${RULES.START_HAND}／ターン上限 ${RULES.TURN_LIMIT}`);
+  line(`  ガーディアン ${api.GUARDIANS.length}体／初期手札 ${RULES.START_HAND}／ターン上限 ${RULES.TURN_LIMIT}`);
   const bad = CHARACTERS.filter(c => !c.element || !CARD_MAP[c.id]);
   if (bad.length) line(`  !! データが足りないキャラ: ${bad.map(c => c.id).join(', ')}`);
 }
