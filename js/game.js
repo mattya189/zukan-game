@@ -3126,10 +3126,6 @@ function startBattle(q) {
       <span class="turn" id="bTurn">準備</span>
       <span class="spd">${[1, 2, 4].map(sp => `<button data-spd="${sp}" aria-pressed="${sp === view.speed}">×${sp}</button>`).join('')}<button data-skip>結果へ</button></span>
     </div>
-    <div class="hp-pills">
-      <span class="hp-pill me" id="hpPill0"><small>あなた</small>HP <b>-</b></span>
-      <span class="hp-pill foe" id="hpPill1"><small>${esc(q.enemy.name)}</small>HP <b>-</b></span>
-    </div>
     <div class="b-field" id="bField">
       <div class="leader" id="leader1"></div>
       <div class="b-rows foe"><div class="row3" id="row-1-back"></div><div class="row3" id="row-1-front"></div></div>
@@ -3138,8 +3134,8 @@ function startBattle(q) {
       <div class="leader" id="leader0"></div>
     </div>
     <div class="b-bottom">
-      ${guardian.skills.map((skill, i) => `<button class="cmd" data-action="skill${i}" aria-pressed="false">${esc(skill.name)}<small>${esc(skill.text)}</small></button>`).join('')}
-      <button class="cmd" data-action="ultimate" aria-pressed="false">${esc(guardian.ultimate.name)}<small>ゲージ100で発動</small></button>
+      ${guardian.skills.map((skill, i) => `<button class="cmd" data-action="skill${i}" aria-pressed="false">${esc(skill.name)}<small>残り${skill.uses}回</small></button>`).join('')}
+      <button class="cmd" data-action="ultimate" aria-pressed="false">${esc(guardian.ultimate.name)}<small>0%</small></button>
       <button class="logbtn" id="bLog">記録</button>
     </div>`;
   document.body.appendChild(el);
@@ -3176,9 +3172,9 @@ function updateGuardianButtons(view) {
     const on = view.pendingAction === action;
     b.setAttribute('aria-pressed', on);
     b.disabled = !view.battle.guardianActionAvailable(0, action) || view.battle.over;
-    if (on) b.querySelector('small').textContent = '次のターンに発動';
-    else if (action === 'ultimate') b.querySelector('small').textContent = pl.guardianUltimateUsed ? '使用済み' : `ゲージ ${pl.guardianGauge}/100`;
-    else { const i = Number(action.slice(-1)); b.querySelector('small').textContent = `${pl.guardian.skills[i].text}（残り${pl.guardianSkillUses[i]}回）`; }
+    if (on) b.querySelector('small').textContent = '次ターン';
+    else if (action === 'ultimate') b.querySelector('small').textContent = pl.guardianUltimateUsed ? '使用済み' : `${pl.guardianGauge}%`;
+    else { const i = Number(action.slice(-1)); b.querySelector('small').textContent = `残り${pl.guardianSkillUses[i]}回`; }
   });
 }
 
@@ -3309,14 +3305,11 @@ function renderBattleSnap(view, snap, enteringUid) {
     const pct = hpNow / sn.maxHp * 100;
     const floats = [...L.querySelectorAll('.float')];
     const relics = (sn.relics || []).map(r => `<span class="relic" title="${esc(r.name)}">${r.icon}<small>${esc(r.name)}</small></span>`).join('');
-    L.innerHTML = `${guardianArt(pl.guardian, 42)}
-      <div class="l-main"><div class="l-name">${esc(pl.name)}・${esc(pl.guardian.name)}</div>
-      <div class="l-hpbar"><i class="${pct <= 30 ? 'low' : ''}" style="width:${pct}%"></i></div>
-      <div class="l-meta">${pl.guardian.passive ? `常時「${esc(pl.guardian.passive.name)}」　` : ''}ゲージ ${sn.guardianGauge}/100　エナジー ${sn.energy}　手札 ${sn.hand}　山札 ${sn.deck}</div>
-      ${relics ? `<div class="relics">${relics}</div>` : ''}</div>
-      <span class="l-hp"><small>HP</small>${hpNow}<small>/${sn.maxHp}</small></span>`;
-    const pill = el.querySelector(`#hpPill${side}`);
-    if (pill) { pill.querySelector('b').textContent = `${hpNow} / ${sn.maxHp}`; pill.classList.toggle('low', pct <= 30); }
+    L.innerHTML = `${guardianArt(pl.guardian, 34)}
+      <div class="l-main">
+        <div class="l-primary"><div class="l-name">${esc(pl.name)}・${esc(pl.guardian.name)}</div><div class="l-hpbar"><i class="${pct <= 30 ? 'low' : ''}" style="width:${pct}%"></i></div><span class="l-hp"><small>HP</small>${hpNow}<small>/${sn.maxHp}</small></span></div>
+        <div class="l-meta"><span class="l-passive">${pl.guardian.passive ? `常時「${esc(pl.guardian.passive.name)}」` : '常時効果なし'}</span><span class="l-gauge">ゲージ ${sn.guardianGauge}%</span><span class="l-resources">E ${sn.energy}　手 ${sn.hand}　山 ${sn.deck}</span>${relics ? `<span class="relics">${relics}</span>` : ''}</div>
+      </div>`;
     floats.forEach(f => L.appendChild(f));
   }
 }
