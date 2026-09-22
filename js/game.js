@@ -1588,7 +1588,51 @@ function tick() {
 // ---------------------------------------------------------------------
 // ランキング
 // ---------------------------------------------------------------------
-function renderRanking() {
+let rankingRenderId = 0;
+let rankingSyncSignature = '';
+let rankingSyncPromise = null;
+
+function rankingRowsHtml(rows, stat, online) {
+  if (!rows.length) return '<p class="muted">まだこの条件の個体がいません。</p>';
+  return `<ul class="rows">${rows.map(r => {
+    const c = app.charMap[r.char_id];
+    if (!c) return '';
+    const inner = `
+      <span class="rank-no">${r.rank}</span>
+      ${art(c, { rarity: r.rarity, size: 40 })}
+      <span><span class="rt">${esc(c.name)} ${starsHtml(r.rarity)}${r.special ? ' ✦' : ''}</span><br><span class="rs">${esc(r.owner_name)}${r.is_mine ? '（あなた）' : ''}</span></span>
+      <span class="rv">${fmtValue(stat, r.value)}</span>`;
+    if (r.is_mine) return `<li><button class="row rank-row mine" data-rank-uid="${r.uid}">${inner}</button></li>`;
+    return `<li><div class="row rank-row static${online ? '' : ' local'}">${inner}</div></li>`;
+  }).join('')}</ul>`;
+}
+
+function rankingSignature(name, vault) {
+  return JSON.stringify([name, vault.map(i => [
+    i.uid, i.char_id, i.rarity, i.special, i.nature, i.serial, i.weight, i.height,
+    i.weight_dev, i.height_dev, i.power, i.speed, i.wisdom, i.luck,
+    i.nature_strength, i.shine, i.appetite, i.total_score
+  ])]);
+}
+
+async function syncOnlineRanking() {
+  const vault = app.server.vault();
+  const name = app.server.player().display_name;
+  const signature = rankingSignature(name, vault);
+  if (signature === rankingSyncSignature) return;
+  if (rankingSyncPromise) await rankingSyncPromise;
+  if (signature === rankingSyncSignature) return;
+  rankingSyncPromise = OnlineRanking.sync(name, vault);
+  try {
+    await rankingSyncPromise;
+    rankingSyncSignature = signature;
+  } finally {
+    rankingSyncPromise = null;
+  }
+}
+
+async function renderRanking() {
+  const renderId = ++rankingRenderId;
   const main = $('#main');
   const rk = app.rk;
   const valid = RANKING_STATS.filter(s => rk.charId ? !s.globalOnly : s.global);
@@ -1600,7 +1644,6 @@ function renderRanking() {
   const statOpts = valid.map(s => `<option value="${s.stat}" ${s.stat === rk.stat ? 'selected' : ''}>${s.stat === 'nature_strength' ? '性格の強さ' : STAT_LABEL[s.stat]}</option>`).join('');
   const dirOpts = def.dirs.map(d => `<option value="${d}" ${d === rk.dir ? 'selected' : ''}>${dirLabel(rk.stat, d)}</option>`).join('');
   const natureOpts = NATURES.map(n => `<option ${n === rk.nature ? 'selected' : ''}>${esc(n)}</option>`).join('');
-  const rows = app.server.ranking({ stat: rk.stat, dir: rk.dir, charId: rk.charId, nature: def.needsNature ? rk.nature : null });
 
   main.innerHTML = `
     <div class="filters">
@@ -1609,21 +1652,40 @@ function renderRanking() {
       <label>並び<select id="rkDir" ${def.dirs.length < 2 ? 'disabled' : ''}>${dirOpts}</select></label>
       ${def.needsNature ? `<label>性格<select id="rkNature">${natureOpts}</select></label>` : ''}
     </div>
-    ${rows.length ? `<ul class="rows">${rows.map(r => {
-      const c = app.charMap[r.char_id];
-      return `<li><button class="row rank-row ${r.is_mine ? 'mine' : ''}" data-uid="${r.uid}">
-        <span class="rank-no">${r.rank}</span>
-        ${art(c, { rarity: r.rarity, size: 40 })}
-        <span><span class="rt">${esc(c.name)} ${starsHtml(r.rarity)}${r.special ? ' ✦' : ''}</span><br><span class="rs">${esc(r.owner_name)}${r.is_mine ? '（あなた）' : ''}</span></span>
-        <span class="rv">${fmtValue(rk.stat, r.value)}</span>
-      </button></li>`;
-    }).join('')}</ul>` : '<p class="muted">まだこの条件の個体がいません。</p>'}`;
+    <p class="ranking-status" id="rkStatus">${typeof OnlineRanking !== 'undefined' && OnlineRanking.configured() ? 'オンラインランキングを更新中…' : 'オンラインランキングはまだ接続されていません。端末内の参考順位です。'}</p>
+    <div id="rkRows"><p class="loading">順位を読み込み中…</p></div>`;
 
   $('#rkChar').onchange = e => { rk.charId = e.target.value; renderRanking(); };
   $('#rkStat').onchange = e => { rk.stat = e.target.value; renderRanking(); };
   $('#rkDir').onchange = e => { rk.dir = e.target.value; renderRanking(); };
   if ($('#rkNature')) $('#rkNature').onchange = e => { rk.nature = e.target.value; renderRanking(); };
-  $$('#main .row').forEach(el => { el.onclick = () => openDetail(Number(el.dataset.uid)); });
+
+  const query = { stat: rk.stat, dir: rk.dir, charId: rk.charId, nature: def.needsNature ? rk.nature : null };
+  let rows;
+  let online = false;
+  let error = '';
+  if (typeof OnlineRanking !== 'undefined' && OnlineRanking.configured()) {
+    try {
+      await syncOnlineRanking();
+      rows = await OnlineRanking.ranking(query);
+      online = true;
+    } catch (e) {
+      error = e.message || '通信できませんでした';
+    }
+  }
+  if (!rows) rows = app.server.ranking(query);
+  if (renderId !== rankingRenderId || app.tab !== 'ranking') return;
+
+  const status = $('#rkStatus');
+  if (online) {
+    status.className = 'ranking-status online';
+    status.textContent = `オンラインランキング（上位${rows.length}体）`;
+  } else if (error) {
+    status.className = 'ranking-status error';
+    status.textContent = `オンラインに接続できません。端末内の参考順位を表示しています。（${error}）`;
+  }
+  $('#rkRows').innerHTML = rankingRowsHtml(rows, rk.stat, online);
+  $$('#rkRows [data-rank-uid]').forEach(el => { el.onclick = () => openDetail(Number(el.dataset.rankUid)); });
 }
 
 // ---------------------------------------------------------------------

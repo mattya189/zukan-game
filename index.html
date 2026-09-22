@@ -534,6 +534,10 @@ select.practice-name { border: 1px solid var(--line); }
 /* ---------- ランキング ---------- */
 .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px; }
 .filters label { font-size: 12px; font-weight: 700; color: var(--ink-soft); display: flex; flex-direction: column; gap: 2px; }
+.ranking-status { margin: 0 0 10px; padding: 7px 10px; border-radius: 9px; background: #E6EBF3; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.ranking-status.online { background: #E0F3EA; color: #176B48; }
+.ranking-status.error { background: #FFF0E3; color: #9A4D00; }
+.rank-row.static { cursor: default; }
 
 /* ---------- ダイアログ・個体票 ---------- */
 dialog { border: 0; padding: 0; width: min(500px, calc(100vw - 20px)); max-height: calc(100vh - 40px); border-radius: 18px; background: var(--paper); color: var(--ink); }
@@ -876,7 +880,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/game.js'];
+  var files = ['data/supabase-config.js', 'data/characters.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;
