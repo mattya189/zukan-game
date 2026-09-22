@@ -83,5 +83,15 @@ create trigger prepare_ranking_entry
 before insert or update on public.ranking_entries
 for each row execute function public.prepare_ranking_entry();
 
+-- 新規プロジェクト作成時に「自動RLS」を有効にした場合の安全設定。
+-- 関数自体はイベントトリガーから使えるまま、Data APIからの直接実行だけを止める。
+do $guard$
+begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    execute 'revoke execute on function public.rls_auto_enable() from public, anon, authenticated';
+  end if;
+end
+$guard$;
+
 -- 匿名プレイヤーを使うため、Dashboard の
 -- Authentication > Sign In / Providers > Anonymous を有効にしてください。
