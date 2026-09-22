@@ -276,8 +276,8 @@ dialog.zukan-page-dialog #dlgBody { height: 100%; }
 .zukan-stamp.on3 { color: #fff; background: var(--r3); border-color: var(--r3); }
 .zukan-stamp.on4 { color: #fff; background: var(--r4); border-color: var(--r4); }
 .zukan-stamp.on5 { color: var(--ink); background: var(--r5); border-color: var(--r5); }
-.zukan-hero-media { position: absolute; inset: 40px 18px 20px; z-index: 1; display: grid; place-items: end center; }
-.zukan-hero-media > img { width: 100%; height: 100%; object-fit: contain; object-position: center bottom; }
+.zukan-hero-media { position: absolute; inset: 40px 18px 20px; z-index: 2; display: block; min-width: 0; min-height: 0; overflow: hidden; }
+.zukan-hero-media > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; object-fit: contain; object-position: center bottom; }
 .zukan-placeholder { display: block; width: min(78%, 270px); height: min(88%, 270px); }
 .zukan-placeholder svg { width: 100%; height: 100%; }
 .zukan-identity { min-height: 76px; padding: 7px 14px 9px; background: var(--paper); transition: padding .22s ease, min-height .22s ease; }
