@@ -92,6 +92,7 @@ const MISSIONS = [
   { id: 'pull',       label: 'ガチャを10回引く',     target: 10, reward: 200 },
   { id: 'release',    label: '個体を5体送り出す',     target: 5,  reward: 150 },
   { id: 'expedition', label: '探索を2回完了する',     target: 2,  reward: 200 },
+  { id: 'quest',      label: 'クエストか周回で1回勝つ', target: 1,  reward: 200 },
   { id: 'detail',     label: '個体票を3回見る',       target: 3,  reward: 50 }
 ];
 const MISSION_ALL_BONUS = 300;

@@ -419,6 +419,37 @@ select.practice-name { border: 1px solid var(--line); }
 .practice-features button { border: 1.5px solid var(--line); background: #fff; border-radius: 99px; padding: 2px 9px; font-size: 12px; font-weight: 700; }
 .practice-features button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
 .practice-pick-list { max-height: 52vh; overflow-y: auto; }
+.quest-heading { display:flex; align-items:center; gap:8px; margin:14px 0 8px; }
+.quest-heading h2 { margin:0; font-size:17px; }
+.quest-count { margin-left:auto; padding:1px 8px; border-radius:99px; background:var(--ink); color:#fff; font-family:var(--dot); font-size:12px; }
+.quest-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.quest-card { position:relative; min-width:0; padding:8px; border:2px solid var(--line); border-radius:12px; background:var(--paper); text-align:left; }
+.quest-card.proof { border-color:var(--gold); box-shadow:inset 0 0 0 2px #FFF0A8; }
+.quest-card-head { display:flex; align-items:center; gap:7px; min-width:0; }
+.quest-card-head strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.quest-card-head small { color:var(--ink-soft); font-size:10px; }
+.quest-proof { position:absolute; top:5px; right:5px; padding:1px 6px; border-radius:99px; background:var(--gold); color:var(--ink); font-size:9px; font-weight:900; }
+.quest-levels { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; margin-top:6px; }
+.quest-level { border:1px solid var(--line); border-radius:6px; padding:3px 1px; background:#fff; font-size:9px; font-weight:900; text-align:center; }
+.quest-level.locked { color:var(--ink-soft); background:#E6EBF3; }
+.quest-level.cleared { color:#fff; background:var(--r3); border-color:var(--r3); }
+.quest-level.goal { color:var(--ink); background:var(--yellow); border-color:var(--gold); }
+.farm-grid { display:grid; gap:8px; }
+.farm-card { display:grid; grid-template-columns:1fr auto; gap:3px 8px; padding:10px; border:2px solid var(--line); border-radius:12px; background:var(--paper); text-align:left; }
+.farm-card strong { font-size:14px; }.farm-card small { color:var(--ink-soft); }.farm-card .farm-time { align-self:center; font-family:var(--dot); }
+.quest-detail { max-width:520px; margin:0 auto; }
+.quest-detail-hero { display:flex; gap:10px; align-items:center; padding:10px; border-radius:14px; background:var(--paper); }
+.quest-detail-hero h2 { margin:0; font-size:18px; }.quest-detail-hero p { margin:1px 0; }
+.quest-info { margin:10px 0; padding:10px; border-radius:12px; background:var(--paper); }
+.quest-info dl { display:grid; grid-template-columns:5.7em 1fr; gap:6px 8px; margin:0; font-size:13px; }
+.quest-info dt { color:var(--ink-soft); font-size:11px; font-weight:900; }.quest-info dd { margin:0; }
+.quest-selected { display:flex; align-items:center; gap:8px; margin:10px 0; padding:8px; border:2px solid var(--line); border-radius:12px; background:var(--paper); }
+.quest-selected > span:nth-child(2) { min-width:0; flex:1; }.quest-selected strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.quest-result-goal { margin-top:8px; padding:8px 10px; border-radius:10px; background:#fff; color:#1E2A4A; text-align:left; font-size:12px; }
+.quest-result-goal b { font-size:15px; }.quest-result-goal .ok { color:#188A55; }.quest-result-goal .ng { color:#C6283D; }
+.quest-result-actions { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:8px; }
+.quest-result-actions button { padding:7px 4px; border:0; border-radius:8px; font-weight:900; }
+.proof-banner { margin:0 0 10px; padding:8px 10px; border:2px solid var(--gold); border-radius:10px; background:#FFF3C4; font-weight:900; }
 @media (max-height: 680px) {
   .practice-battle { gap: 3px; }
   .practice-versus { min-height: 142px; }
@@ -801,7 +832,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'js/game.js'];
+  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'data/stages.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;

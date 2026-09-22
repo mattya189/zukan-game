@@ -264,6 +264,11 @@ class GameServer {
     s.missions = s.missions || { date: '', progress: {}, claimed: {} };
     s.expeditions = s.expeditions || [];
     s.settings = Object.assign({ sound: true, effects: 'full' }, s.settings || {});
+    const qp = s.questProgress || {};
+    s.questProgress = {
+      cleared: qp.cleared || {}, goals: qp.goals || {}, proofs: qp.proofs || {},
+      farmReadyAt: qp.farmReadyAt || {}, arenaStreak: qp.arenaStreak || 0
+    };
     s.dayOffset = s.dayOffset || 0;
     s.expSeq = s.expSeq || 1;
     for (const ind of s.mine) {
@@ -462,6 +467,84 @@ class GameServer {
     });
   }
 
+  questProgress() {
+    const q = this.s.questProgress;
+    return { cleared:{...q.cleared}, goals:{...q.goals}, proofs:{...q.proofs}, farmReadyAt:{...q.farmReadyAt}, arenaStreak:q.arenaStreak };
+  }
+
+  questUnlocked(stageId) {
+    const st = STAGES.find(x => x.id === stageId);
+    if (!st) return false;
+    if (st.level === 1) return true;
+    return !!this.s.questProgress.cleared[`${stageId.slice(0, -1)}${st.level - 1}`];
+  }
+
+  _questOwn(uid) {
+    const own = this.s.mine.find(i => i.uid === Number(uid));
+    if (!own) throw new Error('保管庫から戦う個体を選んでください');
+    return own;
+  }
+
+  questBattle(stageId, uid) {
+    const st = STAGES.find(x => x.id === stageId);
+    if (!st) throw new Error('ステージが見つかりません');
+    if (!this.questUnlocked(stageId)) throw new Error('前の段階をクリアすると挑戦できます');
+    const own = this._questOwn(uid), foe = this.charMap[st.boss];
+    const res = runBattle({
+      a:{ ch:this.charMap[own.char_id], ind:own }, b:{ ch:foe, ind:{...ENEMY_IND[st.level]} },
+      stage:{ name:st.name, features:[...st.features], events:st.events, enemyState:st.enemyState, enemyPower:STAGE_POWER[st.id] }
+    });
+    const q = this.s.questProgress, cleared = res.winner === 0;
+    const first = cleared && !q.cleared[st.id];
+    const goalDone = cleared && !!(st.goal && st.goal.check(res));
+    const goalFirst = goalDone && !q.goals[st.id];
+    let reward = 0;
+    if (cleared) {
+      const rw = QUEST_REWARDS[st.level];
+      reward = first ? rw.first : rw.repeat;
+      if (goalFirst) reward += rw.goal;
+      q.cleared[st.id] = true;
+      if (goalDone) q.goals[st.id] = true;
+      if (st.level === 3 && first) q.proofs[st.boss] = true;
+      this.s.player.coins += reward;
+      this._progress('quest', 1);
+    }
+    this._save();
+    return { ...res, quest:{ stageId, cleared, first, goalDone, goalFirst, reward, proof:first && st.level === 3, enemyId:st.boss } };
+  }
+
+  farmBattle(stageId, uid) {
+    const st = FARM_STAGES.find(x => x.id === stageId);
+    if (!st) throw new Error('周回ステージが見つかりません');
+    const own = this._questOwn(uid), q = this.s.questProgress, now = this.now();
+    const readyAt = Number(q.farmReadyAt[st.id] || 0);
+    if (readyAt > now) throw new Error(`あと${fmtTime(readyAt - now)}で挑戦できます`);
+    const pool = this.characters.filter(c => st.grades.includes(c.grade));
+    const foe = pickWith(Math.random, pool);
+    q.farmReadyAt[st.id] = now + st.cooldown * 1000;
+    const res = runBattle({
+      a:{ ch:this.charMap[own.char_id], ind:own }, b:{ ch:foe, ind:{...st.enemyInd} },
+      stage:{ name:st.name, features:[...st.features], events:st.events, enemyState:st.enemyState, enemyPower:st.enemyPower }
+    });
+    const cleared = res.winner === 0;
+    let reward = 0, multiplier = 1, goalDone = false;
+    if (st.id === 'farm_2') {
+      q.arenaStreak = cleared ? q.arenaStreak + 1 : 0;
+      if (cleared) multiplier = 1 + Math.min(5, q.arenaStreak) * 0.1;
+      goalDone = cleared;
+    } else if (st.goal && st.goal.check) {
+      goalDone = cleared && st.goal.check(res);
+      if (goalDone) multiplier = st.goal.multiplier || 1;
+    }
+    if (cleared) {
+      reward = Math.round(st.reward * multiplier);
+      this.s.player.coins += reward;
+      this._progress('quest', 1);
+    }
+    this._save();
+    return { ...res, quest:{ stageId, cleared, reward, goalDone, multiplier, streak:q.arenaStreak, enemyId:foe.id, readyAt:q.farmReadyAt[st.id] } };
+  }
+
   _holdsWorldRecord(uid) { return Object.values(this.s.hall).some(h => h.uid === uid); }
   recordHolderUids() { return new Set(Object.values(this.s.hall).map(h => h.uid)); }
 
@@ -648,6 +731,7 @@ const PRACTICE_STAGES = [
   { name:'神々の遺跡', features:['岩場','夜空','異界'] }
 ];
 const practice = { open:false, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false };
+const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false };
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -1188,6 +1272,7 @@ function openZukanPage(charId) {
   const found = app.server.titleBook(charId), mineCount = app.server.vault().filter(i => i.char_id === charId).length;
   const titleTags = TITLES.map(t => found.includes(t.id) ? `<em class="tag title">${esc(t.name)}</em>` : '<em class="tag off">？？？</em>').join('');
   const hallMap = Object.fromEntries(app.server.hall(charId).map(r => [`${r.stat}:${r.dir}`,r]));
+  const hasProof = !!app.server.questProgress().proofs[charId];
   const records = RECORD_SPECS.map(([stat,dir]) => { const r=hallMap[`${stat}:${dir}`]; return `<div class="zukan-fact"><dt>${STAT_LABEL[stat]}（${dirLabel(stat,dir)}）</dt><dd>${r ? `<b>${fmtValue(stat,r.value)}</b><small>${esc(r.owner_name)}</small>` : '—'}</dd></div>`; }).join('');
   const grade = ZUKAN_GRADE_INFO[c.grade];
   const body = openDialog(`<div class="zukan-page" style="--zukan-el:${grade[1]}">
@@ -1197,7 +1282,7 @@ function openZukanPage(charId) {
     <div class="zukan-panels"><section class="zukan-panel" data-zukan-panel="basic"><dl class="zukan-facts">${basicFacts.map(([l,v])=>`<div class="zukan-fact"><dt>${l}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${ability ? `<h3 class="zukan-panel-title">マッチアビリティ</h3>${zukanStoryPairsHtml([ability])}` : ''}</section>
     <section class="zukan-panel" data-zukan-panel="story" hidden><div class="story-tools"><button class="btn" id="openAllStories">すべて開く</button><button class="btn" id="closeAllStories">すべてたたむ</button></div>${[1,2,3,4,5].map(r=>zukanStorySectionHtml(c,g,r)).join('')}</section>
     <section class="zukan-panel" data-zukan-panel="combat" hidden>${combatPanelHtml(c)}</section>
-    <section class="zukan-panel" data-zukan-panel="records" hidden><h3 class="zukan-panel-title">見つけた称号 ${found.length} / ${TITLES.length}</h3><div class="title-list">${titleTags}</div><h3 class="zukan-panel-title">世界記録</h3><dl class="zukan-facts zukan-records">${records}</dl><button class="btn primary wide" id="seeMine" ${mineCount?'':'disabled'}>保管庫のこのキャラを見る（${mineCount}体）</button></section></div></div>`, 'zukan');
+    <section class="zukan-panel" data-zukan-panel="records" hidden>${hasProof ? '<div class="proof-banner">🏆 撃破の証　段階3クリア</div>' : ''}<h3 class="zukan-panel-title">見つけた称号 ${found.length} / ${TITLES.length}</h3><div class="title-list">${titleTags}</div><h3 class="zukan-panel-title">世界記録</h3><dl class="zukan-facts zukan-records">${records}</dl><button class="btn primary wide" id="seeMine" ${mineCount?'':'disabled'}>保管庫のこのキャラを見る（${mineCount}体）</button></section></div></div>`, 'zukan');
   const page = body.querySelector('.zukan-page');
   const panels = [...body.querySelectorAll('[data-zukan-panel]')];
   const updateCompact = panel => page.classList.toggle('is-compact', panel.scrollTop > 12);
@@ -1462,6 +1547,10 @@ function tick() {
   if (!app.server) return;
   if (app.tab === 'adventure' && !practice.open) {
     const now = app.server.now();
+    $$('[data-farm-ready]').forEach(el => {
+      const rest = Math.max(0, Number(app.server.questProgress().farmReadyAt[el.dataset.farmReady] || 0) - now);
+      el.textContent = rest ? fmtTime(rest) : '挑戦可';
+    });
     const doneNow = app.server.expeditions().filter(e => e.done).length;
     $$('[data-end]').forEach(el => { el.textContent = fmtTime(Math.max(0, Number(el.dataset.end) - now)); });
     if (doneNow !== app.renderedDone && !$('#dlg').open) renderAdventure();
@@ -1688,6 +1777,123 @@ function showLoginBonus(info) {
   updateBadges();
 }
 
+function questStageById(id) { return STAGES.find(s => s.id === id) || FARM_STAGES.find(s => s.id === id); }
+function isFarmStage(id) { return id && id.startsWith('farm_'); }
+function farmRemaining(id) { return Math.max(0, Number(app.server.questProgress().farmReadyAt[id] || 0) - app.server.now()); }
+
+function questSectionsHtml() {
+  const progress = app.server.questProgress();
+  const clearedCount = Object.keys(progress.cleared).length;
+  const trials = app.chars.map((c, index) => {
+    const stages = STAGES.filter(s => s.boss === c.id).sort((a,b) => a.level - b.level);
+    const levels = stages.map(st => {
+      const unlocked = app.server.questUnlocked(st.id), cleared = !!progress.cleared[st.id], goal = !!progress.goals[st.id];
+      const cls = goal ? 'goal' : cleared ? 'cleared' : unlocked ? '' : 'locked';
+      const label = goal ? `段階${st.level} ★` : cleared ? `段階${st.level} ✓` : unlocked ? `段階${st.level}` : `段階${st.level} 🔒`;
+      return `<button class="quest-level ${cls}" data-quest-stage="${st.id}" ${unlocked ? '' : 'disabled'}>${label}</button>`;
+    }).join('');
+    return `<article class="quest-card ${progress.proofs[c.id] ? 'proof' : ''}">${progress.proofs[c.id] ? '<span class="quest-proof">撃破の証</span>' : ''}<div class="quest-card-head">${art(c,{size:48})}<span><strong>No.${String(index+1).padStart(3,'0')} ${esc(c.name)}</strong><small>${c.grade}級・${esc(ZUKAN_GRADE_INFO[c.grade][0])}</small></span></div><div class="quest-levels">${levels}</div></article>`;
+  }).join('');
+  const farms = FARM_STAGES.map(st => {
+    const rest = farmRemaining(st.id), streak = st.id === 'farm_2' ? `　${progress.arenaStreak}連勝中` : '';
+    return `<button class="farm-card" data-quest-stage="${st.id}"><span><strong>${esc(st.difficulty)}　${esc(st.name)}</strong><small>${st.reward}コイン${streak}</small></span><span class="farm-time" data-farm-ready="${st.id}">${rest ? fmtTime(rest) : '挑戦可'}</span></button>`;
+  }).join('');
+  return `<div class="quest-heading"><h2>キャラ別の試練</h2><span class="quest-count">${clearedCount} / 30</span></div><div class="quest-grid">${trials}</div><div class="quest-heading"><h2>周回</h2></div><div class="farm-grid">${farms}</div>`;
+}
+
+function bindQuestSections(root = document) {
+  root.querySelectorAll('[data-quest-stage]').forEach(b => b.onclick = () => openQuestDetail(b.dataset.questStage));
+}
+
+function questRewardText(st) {
+  if (isFarmStage(st.id)) {
+    if (st.id === 'farm_2') return `${st.reward}コイン（連勝ごとに+10%、最大1.5倍）`;
+    if (st.id === 'farm_3') return `${st.reward}コイン（目標達成で1.5倍）`;
+    return `${st.reward}コイン`;
+  }
+  const rw = QUEST_REWARDS[st.level];
+  return `初回 ${num(rw.first)}／2回目以降 ${num(rw.repeat)}／目標初達成 +${num(rw.goal)}コイン${st.level === 3 ? ' ＋ 撃破の証' : ''}`;
+}
+
+function selectedQuestIndividualHtml() {
+  const ind = app.server.vault().find(i => i.uid === questView.ownUid);
+  if (!ind) return '<span class="muted">個体が選ばれていません</span>';
+  const c = app.charMap[ind.char_id];
+  return `${art(c,{ind,size:48})}<span><strong>${esc(c.name)} ${starsHtml(ind.rarity)}</strong><small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small></span>`;
+}
+
+function openQuestDetail(stageId) {
+  const st = questStageById(stageId);
+  if (!st) return;
+  practice.open = false;
+  document.body.classList.remove('practice-mode');
+  questView.stageId = stageId;
+  const vault = app.server.vault();
+  if (!questView.ownUid || !vault.some(i => i.uid === questView.ownUid)) questView.ownUid = vault[0]?.uid || null;
+  const farm = isFarmStage(stageId), enemy = farm ? null : app.charMap[st.boss];
+  const enemyHtml = farm
+    ? `<div class="art" style="width:86px;height:86px;display:grid;place-items:center;font-family:var(--dot);font-size:26px">？</div><span><h2>${esc(st.difficulty)}　${esc(st.name)}</h2><p>${st.grades.join('・')}級からランダム</p></span>`
+    : `${art(enemy,{size:86})}<span><h2>${esc(st.name)}</h2><p>敵：${esc(enemy.name)}</p><p>${enemy.grade}級・覚悟${esc(RESOLVE_LABEL[enemy.resolve])}</p></span>`;
+  const featureText = st.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>') || 'なし';
+  const rest = farm ? farmRemaining(stageId) : 0;
+  $('#main').innerHTML = `<section class="quest-detail"><button class="btn" id="questDetailBack">← クエスト一覧</button><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
+  $('#questDetailBack').onclick = renderAdventure;
+  $('#chooseQuestOwn').onclick = () => openQuestPicker();
+  $('#startQuest').onclick = () => { renderQuestBattle(); startQuestFight(); };
+}
+
+function openQuestPicker(filter = '') {
+  const list = app.server.vault().filter(i => !filter || i.char_id === filter);
+  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="practice-pick-list"><ul class="rows">${list.map(ind => { const c=app.charMap[ind.char_id], titles=(ind.titles||[]).map(titleName).filter(Boolean); return `<li><button class="row ${ind.uid===questView.ownUid?'selected':''}" data-quest-uid="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`; }).join('') || '<li class="muted small">該当する個体がいません</li>'}</ul></div>`);
+  $('#questFilter').onchange = e => openQuestPicker(e.target.value);
+  body.querySelectorAll('[data-quest-uid]').forEach(b => b.onclick = () => { questView.ownUid=Number(b.dataset.questUid); closeDialog(); openQuestDetail(questView.stageId); });
+}
+
+function questCorner(side, hp = null, maxHp = null) {
+  const st = questStageById(questView.stageId), own = app.server.vault().find(i => i.uid === questView.ownUid);
+  const c = side === 0 ? app.charMap[own.char_id] : app.charMap[questView.enemyId || st.boss];
+  const ind = side === 0 ? own : (isFarmStage(st.id) ? st.enemyInd : ENEMY_IND[st.level]);
+  const el = $(`#questCorner${side}`), grade=ZUKAN_GRADE_INFO[c.grade], pct=hp==null||!maxHp?100:Math.max(0,hp)/maxHp*100, src=slotSrc(c,'base');
+  el.style.setProperty('--c',grade[1]);
+  el.innerHTML=`<div class="practice-art">${src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,ind,false,1,1)}</div><div class="practice-name">${esc(c.name)}</div><div class="practice-grade"><b>${c.grade}</b>${esc(grade[0])}・覚悟${esc(RESOLVE_LABEL[c.resolve])}</div><div class="practice-ind"><span>パ<b>${num(ind.power)}</b></span><span>速<b>${num(ind.speed)}</b></span><span>賢<b>${num(ind.wisdom)}</b></span></div><div class="practice-hpbar"><i class="${pct<=30?'low':''}" style="width:${pct}%"></i></div><div class="practice-hpnum">${hp==null?'':`HP ${Math.max(0,Math.round(hp))} / ${maxHp}`}</div>`;
+}
+
+function renderQuestBattle() {
+  const st=questStageById(questView.stageId), own=app.server.vault().find(i=>i.uid===questView.ownUid);
+  if (!st || !own) return;
+  if (questView.running) { questView.token++; questView.running=false; }
+  practice.open=true; document.body.classList.add('practice-mode');
+  questView.enemyId=isFarmStage(st.id)?app.chars.find(c=>st.grades.includes(c.grade)).id:st.boss;
+  $('#main').innerHTML=`<section class="practice-battle"><div class="practice-top"><button class="practice-mini practice-back" id="questListBack">← 一覧</button><h1>${esc(st.name)}</h1></div><div class="practice-versus"><div class="practice-corner" id="questCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="questCorner1"></div></div><div class="practice-stage"><b>${esc(isFarmStage(st.id)?`周回・${st.difficulty}`:`段階${st.level}`)}</b><p class="practice-feature-line">特徴：${st.features.map(esc).join('・')||'なし'}　／　目標：${esc(st.goal?.text||'なし')}</p></div><div class="practice-feed" id="questFeed" aria-live="polite"></div><div class="practice-actions"><button id="questBattleList">一覧へ</button><button id="questSpeed">実況：<br>${questView.fast?'はやい':'ふつう'}</button><button id="questSkip">結果まで<br>飛ばす</button><button class="go" id="questGo">戦わせる</button></div></section>`;
+  questCorner(0); questCorner(1);
+  const back=()=>{ practice.open=false; questView.token++; document.body.classList.remove('practice-mode'); renderAdventure(); };
+  $('#questListBack').onclick=back; $('#questBattleList').onclick=back;
+  $('#questSpeed').onclick=e=>{questView.fast=!questView.fast;e.currentTarget.innerHTML=`実況：<br>${questView.fast?'はやい':'ふつう'}`;};
+  $('#questSkip').onclick=()=>{questView.skip=true;}; $('#questGo').onclick=startQuestFight;
+}
+
+async function startQuestFight() {
+  const st=questStageById(questView.stageId), token=++questView.token;
+  questView.skip=false; questView.running=true;
+  const feed=$('#questFeed'), button=$('#questGo'); feed.innerHTML=''; button.textContent='やり直す'; button.classList.add('running');
+  let res;
+  try { res=isFarmStage(st.id)?app.server.farmBattle(st.id,questView.ownUid):app.server.questBattle(st.id,questView.ownUid); }
+  catch(e){questView.running=false;button.textContent='戦わせる';button.classList.remove('running');toast(e.message);return;}
+  questView.enemyId=res.quest.enemyId; renderCoins(true); questCorner(0,res.A.maxHp,res.A.maxHp); questCorner(1,res.B.maxHp,res.B.maxHp);
+  const names=[res.A.name,res.B.name], wait=ms=>new Promise(r=>setTimeout(r,questView.skip?0:questView.fast?ms/4:ms));
+  for(const event of compressPracticeLog(res.log,names)){if(token!==questView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hpA!=null){questCorner(0,event.hpA,res.A.maxHp);questCorner(1,event.hpB,res.B.maxHp);}if(!questView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}
+  if(token!==questView.token||!practice.open)return;
+  questCorner(0,res.A.hp,res.A.maxHp);questCorner(1,res.B.hp,res.B.maxHp);
+  const q=res.quest,winner=res.winner==null?null:names[res.winner];
+  let reward=q.reward?`${num(q.reward)}コイン獲得${q.first?'（初回）':''}${q.goalFirst?'・目標初達成ボーナス込み':''}`:'報酬なし';
+  if(st.id==='farm_2'&&q.cleared) reward+=`（${q.streak}連勝・${q.multiplier.toFixed(1)}倍）`;
+  if(st.id==='farm_3'&&q.multiplier>1) reward+='（目標達成・1.5倍）';
+  const goal=st.goal?`<div class="quest-result-goal">挑戦目標：${esc(st.goal.text)}<br><b class="${q.goalDone?'ok':'ng'}">${q.goalDone?'達成！':'未達成'}</b></div>`:'';
+  feed.insertAdjacentHTML('beforeend',`<div class="practice-result"><h2>${q.cleared?'クリア！':'敗北…'}</h2><p>${winner?esc(winner)+'の勝ち':'引き分け'}／${esc(res.reason)}／${res.rounds}ラウンド</p><p><b>${esc(reward)}</b></p>${q.proof?'<p>🏆 撃破の証を獲得！</p>':''}${goal}<div class="quest-result-actions"><button id="questRetry">もう一度挑戦</button><button id="questResultList">クエスト一覧へ</button></div></div>`);
+  feed.scrollTop=feed.scrollHeight;questView.running=false;button.textContent='もう一度';button.classList.remove('running');
+  $('#questRetry').onclick=()=>startQuestFight(); $('#questResultList').onclick=()=>{practice.open=false;document.body.classList.remove('practice-mode');renderAdventure();};
+}
+
 function practiceStage() {
   const preset = PRACTICE_STAGES[practice.stageIndex];
   return { name: preset ? preset.name : 'オリジナルの舞台', features: practice.features.slice() };
@@ -1888,8 +2094,9 @@ function openPracticeBattle(enemyCharId = '') {
 // 冒険には日課・探索と練習試合の入口を表示する。
 function renderAdventure() {
   const main = $('#main');
-  main.innerHTML = `<section class="panel practice-entry"><h2>対戦（練習試合）</h2><p class="muted small" style="margin:0 0 8px">保管庫の個体を選び、10体のキャラや好きな舞台と戦えます。報酬はありません。</p><button class="btn primary wide" id="openPractice">練習試合を始める</button></section><div id="dailyArea"></div>`;
+  main.innerHTML = `<section class="panel practice-entry"><h2>対戦（練習試合）</h2><p class="muted small" style="margin:0 0 8px">保管庫の個体を選び、10体のキャラや好きな舞台と戦えます。報酬はありません。</p><button class="btn primary wide" id="openPractice">練習試合を始める</button></section><section id="questArea">${questSectionsHtml()}</section><div id="dailyArea"></div>`;
   $('#openPractice').onclick = () => openPracticeBattle();
+  bindQuestSections($('#questArea'));
   renderDaily($('#dailyArea'));
 }
 
