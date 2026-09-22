@@ -12,6 +12,7 @@
 //     res.A, res.B … { name, hp, maxHp }　　res.rounds, res.reason
 //   キャラに必要な項目：id, name, grade, resolve, tags, stats{atk,def,wis,spd,sta,amb}
 //   クエスト用：stage.enemyPower（敵の強さ）、stage.enemyState(ctx, 敵, 自分)、res.state（挑戦目標の判定用の記録）
+//   集団戦は js/team.js（このファイルの部品を使う）
 //   新しいキャラを追加するときは、FIGHTER_KITS に部品を足し、KIT_TUNE に補正値（最初は1）を足す
 // =====================================================================
 
@@ -284,6 +285,7 @@ function doAttack(ctx, f, foe, opt = {}) {
     if (f.uses.has('sound')) { if (ctx.feat('反響')) dmg *= 1.15; if (ctx.feat('静寂')) dmg *= 0.85; }
     if (f.uses.has('rock') && ctx.feat('岩場')) dmg *= 1.15;
     if (ctx.feat('歓声') && ctx.firstHit === f) dmg *= 1.05;
+    if (ctx.rowMul) dmg *= ctx.rowMul(f, foe, opt);   // 集団戦：並び（前衛・後衛）の効果
     if (f.kit.damageOut) dmg = f.kit.damageOut(ctx, f, foe, dmg, opt) ?? dmg;
     dmg *= ((typeof KIT_TUNE !== 'undefined' && KIT_TUNE[f.ch.id]) || 1) * (f.form || 1);
     if (f.side === 1 && ctx.stage.enemyPower) dmg *= ctx.stage.enemyPower;   // ステージごとの敵の強さ
@@ -303,6 +305,7 @@ function doAttack(ctx, f, foe, opt = {}) {
 
 function applyDamage(ctx, src, tgt, amount, info = {}) {
   let dmg = amount;
+  if (ctx.beforeDamage) dmg = ctx.beforeDamage(src, tgt, dmg, info);   // 集団戦：味方をかばう効果など
   if (tgt.kit.damageIn) dmg = tgt.kit.damageIn(ctx, tgt, src, dmg, info) ?? dmg;
   if (tgt.shield > 0 && !info.ignoreShield) {
     const absorbed = Math.min(tgt.shield, dmg);
