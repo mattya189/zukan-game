@@ -159,28 +159,6 @@ const ImageStore = {
   async del(key) { delete this.cache[key]; await this._tx('readwrite', os => os.delete(key)); }
 };
 
-// 画像を最大512pxに縮めて保存用の文字列にする
-function resizeImage(file, max = 512) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error('画像を読み込めませんでした'));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error('この形式の画像は使えません'));
-      img.onload = () => {
-        const scale = Math.min(1, max / Math.max(img.width, img.height));
-        const w = Math.round(img.width * scale), h = Math.round(img.height * scale);
-        const cv = document.createElement('canvas');
-        cv.width = w; cv.height = h;
-        cv.getContext('2d').drawImage(img, 0, 0, w, h);
-        resolve(cv.toDataURL('image/png'));
-      };
-      img.src = reader.result;
-    };
-    reader.readAsDataURL(file);
-  });
-}
-
 // =====================================================================
 // GameServer：ゲームのルール（オンライン化するときはサーバーへ移す部分）
 // =====================================================================
@@ -700,10 +678,6 @@ class GameServer {
     return v;
   }
 
-  // テスト用
-  debugAddCoins(n) { this.s.player.coins += n; this._save(); return this.s.player.coins; }
-  debugFinishExpeditions() { const now = this.now(); this.s.expeditions.forEach(e => { e.end = Math.min(e.end, now); }); this._save(); }
-  debugNextDay() { this.s.dayOffset += 1; this._save(); }
   reset() { store.del(SAVE_KEY); store.del(OLD_SAVE_KEY); }
 }
 
@@ -1685,7 +1659,7 @@ function openDetail(uid) {
 }
 
 // ---------------------------------------------------------------------
-// 設定・画像登録
+// 設定
 // ---------------------------------------------------------------------
 function openSettings() {
   const st = app.server.settings();
@@ -1696,13 +1670,8 @@ function openSettings() {
     </label>
     <div class="setting-row"><span>効果音</span><label class="check"><input type="checkbox" id="sSound" ${st.sound ? 'checked' : ''}>鳴らす</label></div>
     <div class="setting-row"><span>ガチャ演出</span><select id="sFx"><option value="full" ${st.effects === 'full' ? 'selected' : ''}>フル</option><option value="short" ${st.effects === 'short' ? 'selected' : ''}>短め</option></select></div>
-    <div class="setting-row"><span>キャラ画像</span><button class="btn" id="sImages">登録する</button></div>
-    <h3 style="font-size:14px;margin:16px 0 4px">テスト用</h3>
-    <p class="muted small" style="margin:0 0 6px">デモで動きを確かめるための機能です。本番版にはありません。</p>
+    <h3 style="font-size:14px;margin:16px 0 4px">データ管理</h3>
     <div style="display:flex;flex-wrap:wrap;gap:6px">
-      <button class="btn" id="dbgCoins">+1000コイン</button>
-      <button class="btn" id="dbgExp">探索を今すぐ終える</button>
-      <button class="btn" id="dbgDay">次の日にする</button>
       <button class="btn danger" id="dbgReset">データを消す</button>
     </div>`);
   body.querySelector('#nameSave').onclick = () => {
@@ -1710,60 +1679,11 @@ function openSettings() {
   };
   body.querySelector('#sSound').onchange = e => { app.server.setSetting('sound', e.target.checked); if (e.target.checked) Sound.coin(); };
   body.querySelector('#sFx').onchange = e => app.server.setSetting('effects', e.target.value);
-  body.querySelector('#sImages').onclick = () => openImageManager();
-  body.querySelector('#dbgCoins').onclick = () => { app.server.debugAddCoins(1000); gained(1000, 'テスト'); };
-  body.querySelector('#dbgExp').onclick = () => { app.server.debugFinishExpeditions(); toast('探索を終わらせました'); render(); };
-  body.querySelector('#dbgDay').onclick = () => {
-    app.server.debugNextDay();
-    closeDialog();
-    render();
-    showLoginBonus(app.server.dailyLogin());
-  };
   body.querySelector('#dbgReset').onclick = async () => {
     if (!await askConfirm('デモのデータをすべて消します。登録した画像は残ります。', '消す')) return;
     app.server.reset();
     location.reload();
   };
-}
-
-function openImageManager(charId = app.chars[0].id) {
-  const c = app.charMap[charId];
-  const slots = [['base', '通常（★1〜）'], ['r4', '別ポーズ（★4）'], ['r5', '特別（★5）']];
-  const body = openDialog(`
-    <h2 style="margin:0 0 6px">キャラ画像の登録</h2>
-    <p class="muted small" style="margin:0 0 8px">背景が透明なPNGがおすすめです。正方形に近い画像がきれいに収まります。画像はこの端末の中だけに保存されます。${ImageStore.db ? '' : '<br><b>この環境では画像を保存できないため、ページを閉じると消えます。</b>'}</p>
-    <select id="imgChar" style="width:100%">${app.chars.map(x => `<option value="${x.id}" ${x.id === charId ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-    <div class="img-slots">${slots.map(([slot, label]) => {
-      const key = `${c.id}:${slot}`;
-      const src = slotSrc(c, slot);
-      return `<div class="img-slot">
-        <div class="preview">${src ? `<img src="${esc(src)}" alt="">` : '<span class="muted">未登録</span>'}</div>
-        ${label}
-        <label class="btn" style="position:relative">画像を選ぶ<input type="file" accept="image/*" data-slot="${slot}"></label>
-        ${ImageStore.cache[key] ? `<button class="btn" data-del="${slot}">削除</button>` : ''}
-      </div>`;
-    }).join('')}</div>
-    <p class="muted small">別ポーズと特別が未登録なら、通常の画像を使います。</p>
-    <button class="btn wide" id="backSettings">設定にもどる</button>`);
-
-  body.querySelector('#imgChar').onchange = e => openImageManager(e.target.value);
-  body.querySelectorAll('input[type="file"]').forEach(inp => {
-    inp.onchange = async () => {
-      const file = inp.files && inp.files[0];
-      if (!file) return;
-      try {
-        const dataUrl = await resizeImage(file);
-        await ImageStore.put(`${c.id}:${inp.dataset.slot}`, dataUrl);
-        toast('画像を登録しました');
-        openImageManager(c.id);
-        render();
-      } catch (e) { toast(e.message); }
-    };
-  });
-  body.querySelectorAll('[data-del]').forEach(b => {
-    b.onclick = async () => { await ImageStore.del(`${c.id}:${b.dataset.del}`); openImageManager(c.id); render(); };
-  });
-  body.querySelector('#backSettings').onclick = () => openSettings();
 }
 
 function showLoginBonus(info) {
