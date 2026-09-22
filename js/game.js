@@ -443,6 +443,25 @@ class GameServer {
   titleBook(charId) { return (this.s.titleBook[charId] || []).slice(); }
   dispatchedUids() { return new Set(this.s.expeditions.flatMap(e => e.uids)); }
 
+  // ---------- 練習試合 ----------
+  rollPracticeEnemy(enemyCharId) {
+    const c = this.charMap[enemyCharId];
+    if (!c) throw new Error('相手のキャラが見つかりません');
+    return generateIndividual(Math.random, c, 3, 0);
+  }
+
+  practiceBattle(uid, enemyCharId, stage, enemyInd) {
+    const own = this.s.mine.find(i => i.uid === Number(uid));
+    const enemy = this.charMap[enemyCharId];
+    if (!own) throw new Error('保管庫から戦う個体を選んでください');
+    if (!enemy) throw new Error('相手のキャラが見つかりません');
+    return runBattle({
+      a: { ch: this.charMap[own.char_id], ind: own },
+      b: { ch: enemy, ind: enemyInd || this.rollPracticeEnemy(enemyCharId) },
+      stage: stage || { name: '無名の荒野（特徴なし）', features: [] }
+    });
+  }
+
   _holdsWorldRecord(uid) { return Object.values(this.s.hall).some(h => h.uid === uid); }
   recordHolderUids() { return new Set(Object.values(this.s.hall).map(h => h.uid)); }
 
@@ -614,6 +633,21 @@ const app = {
   busy: false,
   renderedDone: 0
 };
+
+const PRACTICE_FEATURES = ['岩場','夜空','反響','静寂','騒音','寒冷','強風','無風','狭所','開けた場所','戦場','安らぎ','小動物','生命の気配','祭壇','歓声','異界'];
+const PRACTICE_STAGES = [
+  { name:'無名の荒野（特徴なし）', features:[] },
+  { name:'古戦場', features:['戦場','開けた場所'] },
+  { name:'岩場の谷', features:['岩場','狭所'] },
+  { name:'冬の山寺', features:['寒冷','安らぎ'] },
+  { name:'伝歌の大劇場', features:['反響','歓声'] },
+  { name:'天球儀の内部', features:['夜空','開けた場所'] },
+  { name:'荒海の卒業航路', features:['強風','狭所'] },
+  { name:'万生の産声', features:['反響','生命の気配','開けた場所'] },
+  { name:'神魔の玉座', features:['祭壇','歓声'] },
+  { name:'神々の遺跡', features:['岩場','夜空','異界'] }
+];
+const practice = { open:false, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false };
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -821,6 +855,9 @@ function updateBadges() {
 }
 
 function show(tab) {
+  practice.open = false;
+  practice.token++;
+  document.body.classList.remove('practice-mode');
   app.tab = tab;
   app.selectMode = false; app.selected.clear();
   $$('nav.tabs button').forEach(b => { if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
@@ -1119,7 +1156,7 @@ function zukanHeroMediaHtml(c, slot, label) {
   return `<span class="zukan-placeholder" aria-label="${esc(c.name)}の仮の絵">${placeholderSvg(c, null, false, 1, 1)}</span>`;
 }
 
-const GRADE_INFO = {
+const ZUKAN_GRADE_INFO = {
   F:['微神級','#8E99A8'], E:['小神級','#2FA36B'], D:['常神級','#3B7DDD'], C:['強神級','#D6A600'],
   B:['大神級','#E67E22'], A:['超神級','#E6394A'], S:['神話級','#8E44AD'], ORIGIN:['特殊等級','#159A9C']
 };
@@ -1130,7 +1167,7 @@ function combatPanelHtml(c) {
   const data = COMBATS[c.id] || { type:'読み込み中', sections:[] };
   const bars = Object.entries(c.stats).map(([key,value]) => `<div class="combat-stat"><span>${COMBAT_STAT_LABEL[key]}</span><div><i style="width:${value}%"></i></div><b>${value}</b></div>`).join('');
   const sections = data.sections.map(([heading,text], index) => `<details class="story" ${index === 0 ? 'open' : ''}><summary><span class="story-label">${esc(heading)}</span><span class="story-preview">${esc(String(text).split('\n')[0])}</span><span class="story-more">続きを読む</span><span class="story-less">たたむ</span></summary><div class="story-body">${zukanStoryTextHtml(text)}</div></details>`).join('');
-  return `<span class="combat-type">${esc(data.type)}</span><div class="combat-stats">${bars}</div><div class="combat-labels"><b>覚悟：${RESOLVE_LABEL[c.resolve]}</b>${c.tags.map(tag => `<em>${esc(tag)}</em>`).join('')}</div>${sections}`;
+  return `<span class="combat-type">${esc(data.type)}</span><div class="combat-stats">${bars}</div><div class="combat-labels"><b>覚悟：${RESOLVE_LABEL[c.resolve]}</b>${c.tags.map(tag => `<em>${esc(tag)}</em>`).join('')}</div>${sections}<button class="btn primary wide" data-practice-char="${c.id}" style="margin-top:12px">このキャラと練習試合をする</button>`;
 }
 
 function openZukanPage(charId) {
@@ -1147,12 +1184,12 @@ function openZukanPage(charId) {
   }
   const idx = app.chars.indexOf(c) + 1, story = STORIES[c.id] || {}, one = story['1'] || [];
   const ability = one.find(([key]) => key === 'マッチアビリティ');
-  const basicFacts = [['分類',c.category],['種類',c.kind || '—'],['等級',`${c.grade}級（${GRADE_INFO[c.grade][0]}）`],['体重の基準',zukanMeasure(c.base_weight,'kg')],['身長の基準',zukanMeasure(c.base_height,'cm')],['出やすい性格',c.likely_natures.join('・')]];
+  const basicFacts = [['分類',c.category],['種類',c.kind || '—'],['等級',`${c.grade}級（${ZUKAN_GRADE_INFO[c.grade][0]}）`],['体重の基準',zukanMeasure(c.base_weight,'kg')],['身長の基準',zukanMeasure(c.base_height,'cm')],['出やすい性格',c.likely_natures.join('・')]];
   const found = app.server.titleBook(charId), mineCount = app.server.vault().filter(i => i.char_id === charId).length;
   const titleTags = TITLES.map(t => found.includes(t.id) ? `<em class="tag title">${esc(t.name)}</em>` : '<em class="tag off">？？？</em>').join('');
   const hallMap = Object.fromEntries(app.server.hall(charId).map(r => [`${r.stat}:${r.dir}`,r]));
   const records = RECORD_SPECS.map(([stat,dir]) => { const r=hallMap[`${stat}:${dir}`]; return `<div class="zukan-fact"><dt>${STAT_LABEL[stat]}（${dirLabel(stat,dir)}）</dt><dd>${r ? `<b>${fmtValue(stat,r.value)}</b><small>${esc(r.owner_name)}</small>` : '—'}</dd></div>`; }).join('');
-  const grade = GRADE_INFO[c.grade];
+  const grade = ZUKAN_GRADE_INFO[c.grade];
   const body = openDialog(`<div class="zukan-page" style="--zukan-el:${grade[1]}">
     <header class="zukan-hero"><div class="zukan-art-stage"><span class="zukan-no">No.${String(idx).padStart(3,'0')}</span><div class="zukan-hero-media">${zukanHeroMediaHtml(c,'base','通常')}</div></div>
     <div class="zukan-identity"><h2>${esc(c.name)}</h2><p>${esc(c.title)}</p><div><strong class="grade" style="--grade:${grade[1]}">${c.grade}級・${grade[0]}${c.category === 'マッチ守護者' ? '（守護者）' : ''}</strong><em>${esc(c.category)}</em>${c.kind ? `<em>${esc(c.kind)}</em>` : ''}</div></div></header>
@@ -1170,6 +1207,7 @@ function openZukanPage(charId) {
   body.querySelector('#openAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=true;});
   body.querySelector('#closeAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=false;});
   const mine=body.querySelector('#seeMine'); if(mine) mine.onclick=()=>{ app.vf={...app.vf,charId,rarity:'',titled:false}; closeDialog(); show('vault'); };
+  const fight=body.querySelector('[data-practice-char]'); if(fight) fight.onclick=()=>{ closeDialog(); openPracticeBattle(fight.dataset.practiceChar); };
 }
 
 // ---------------------------------------------------------------------
@@ -1422,7 +1460,7 @@ function openExpeditionPlanner(state = { dest: 'field', picked: [] }) {
 
 function tick() {
   if (!app.server) return;
-  if (app.tab === 'adventure') {
+  if (app.tab === 'adventure' && !practice.open) {
     const now = app.server.now();
     const doneNow = app.server.expeditions().filter(e => e.done).length;
     $$('[data-end]').forEach(el => { el.textContent = fmtTime(Math.max(0, Number(el.dataset.end) - now)); });
@@ -1650,10 +1688,208 @@ function showLoginBonus(info) {
   updateBadges();
 }
 
-// 冒険は日課・探索だけを表示する。
+function practiceStage() {
+  const preset = PRACTICE_STAGES[practice.stageIndex];
+  return { name: preset ? preset.name : 'オリジナルの舞台', features: practice.features.slice() };
+}
+
+function practiceCorner(side, hp = null, maxHp = null) {
+  const own = app.server.vault().find(i => i.uid === practice.ownUid);
+  const el = $(`#practiceCorner${side}`);
+  if (side === 0 && !own) {
+    el.innerHTML = `<div class="practice-art" style="display:grid;place-items:center"><span class="muted small">個体未選択</span></div><button class="practice-name" id="choosePracticeOwn">保管庫から選ぶ</button><div class="practice-grade">ガチャで仲間にした個体を使います</div>`;
+    el.querySelector('#choosePracticeOwn').onclick = () => openPracticePicker();
+    return;
+  }
+  const ind = side === 0 ? own : practice.enemyInd;
+  const c = side === 0 ? (own && app.charMap[own.char_id]) : app.charMap[practice.enemyId];
+  if (!el || !c) return;
+  const grade = ZUKAN_GRADE_INFO[c.grade] || [c.grade, '#8E99A8'];
+  const pct = hp == null || !maxHp ? 100 : Math.max(0, hp) / maxHp * 100;
+  const src = slotSrc(c, 'base');
+  el.style.setProperty('--c', grade[1]);
+  const nameControl = side === 0
+    ? `<button class="practice-name" id="choosePracticeOwn">${own ? esc(c.name) : '保管庫から選ぶ'}</button>`
+    : `<select class="practice-name" id="practiceEnemy" aria-label="対戦相手">${app.chars.map(x => `<option value="${x.id}" ${x.id === c.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>`;
+  el.innerHTML = `<div class="practice-art">${src ? `<img src="${esc(src)}" alt="${esc(c.name)}">` : placeholderSvg(c, ind, false, 1, 1)}</div>
+    ${nameControl}
+    <div class="practice-grade"><b>${c.grade}</b>${esc(grade[0])}・覚悟${esc(RESOLVE_LABEL[c.resolve])}</div>
+    <div class="practice-ind"><span>パ<b>${num(ind.power)}</b></span><span>速<b>${num(ind.speed)}</b></span><span>賢<b>${num(ind.wisdom)}</b></span></div>
+    <div class="practice-hpbar"><i class="${pct <= 30 ? 'low' : ''}" style="width:${pct}%"></i></div>
+    <div class="practice-hpnum">${hp == null ? '' : `HP ${Math.max(0, Math.round(hp))} / ${maxHp}`}</div>`;
+  const choose = el.querySelector('#choosePracticeOwn');
+  if (choose) choose.onclick = () => openPracticePicker();
+  const enemy = el.querySelector('#practiceEnemy');
+  if (enemy) enemy.onchange = () => {
+    practice.enemyId = enemy.value;
+    practice.enemyInd = app.server.rollPracticeEnemy(practice.enemyId);
+    practiceCorner(1);
+  };
+}
+
+function openPracticePicker(filter = '') {
+  const all = app.server.vault();
+  const list = filter ? all.filter(i => i.char_id === filter) : all;
+  const body = openDialog(`<h2 style="margin:0 0 8px">戦う個体を選ぶ</h2>
+    <label class="small">キャラで絞り込み
+      <select id="practiceFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id === filter ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
+    </label>
+    <div class="practice-pick-list"><ul class="rows">${list.map(ind => {
+      const c = app.charMap[ind.char_id];
+      const titles = (ind.titles || []).map(titleName).filter(Boolean);
+      return `<li><button class="row ${ind.uid === practice.ownUid ? 'selected' : ''}" data-practice-uid="${ind.uid}">
+        ${art(c, { ind, size:44 })}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length ? `<br>称号：${titles.map(esc).join('・')}` : ''}</span></span><span class="rv">#${pad6(ind.serial)}</span>
+      </button></li>`;
+    }).join('') || '<li class="muted small" style="padding:16px">該当する個体がいません</li>'}</ul></div>`);
+  body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value);
+  body.querySelectorAll('[data-practice-uid]').forEach(b => b.onclick = () => {
+    practice.ownUid = Number(b.dataset.practiceUid);
+    closeDialog();
+    practiceCorner(0);
+  });
+}
+
+function openPracticeFeatures() {
+  const descriptions = () => practice.features.length
+    ? practice.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>')
+    : 'いまは特徴なし';
+  const body = openDialog(`<h2 style="margin:0 0 4px">舞台の特徴</h2><p class="muted small" style="margin:0">押すと入れたり外したりできます。両者に効きます。</p>
+    <div class="practice-features">${PRACTICE_FEATURES.map(f => `<button data-practice-feature="${f}" aria-pressed="${practice.features.includes(f)}">${f}</button>`).join('')}</div>
+    <p class="small" id="practiceFeatureText">${descriptions()}</p><button class="btn primary wide" id="practiceFeatureDone">決定</button>`);
+  body.querySelectorAll('[data-practice-feature]').forEach(b => b.onclick = () => {
+    const f = b.dataset.practiceFeature;
+    practice.features = practice.features.includes(f) ? practice.features.filter(x => x !== f) : practice.features.concat(f);
+    practice.stageIndex = -1;
+    b.setAttribute('aria-pressed', String(practice.features.includes(f)));
+    body.querySelector('#practiceFeatureText').innerHTML = descriptions();
+    const line = $('.practice-feature-line');
+    if (line) line.textContent = `特徴：${practice.features.length ? practice.features.join('・') : 'なし'}`;
+  });
+  body.querySelector('#practiceFeatureDone').onclick = () => { closeDialog(); renderPracticeBattle(); };
+}
+
+function practiceEventHtml(e, names) {
+  let text = esc(e.text);
+  names.forEach((name, i) => { text = text.split(esc(name)).join(`<b class="s${i}">${esc(name)}</b>`); });
+  return `<p class="ev ${e.kind}">${text}${e.note ? `<span class="note">${esc(e.note)}</span>` : ''}</p>`;
+}
+
+function compressPracticeLog(log, names) {
+  const out = [];
+  let buf = [];
+  const flush = () => {
+    if (!buf.length) return;
+    const rounds = [...new Set(buf.map(e => e.round))];
+    if (rounds.length <= 1) out.push(...buf);
+    else {
+      const damage = [0, 0];
+      buf.forEach(e => { if (e.dmg && e.side != null) damage[e.side] += e.dmg; });
+      const last = buf[buf.length - 1];
+      out.push({ kind:'sum', round:last.round, text:`ラウンド${rounds[0]}〜${rounds[rounds.length - 1]}：打ち合いが続く（${names[0]}が${damage[0]}、${names[1]}が${damage[1]}ダメージ）`, hpA:last.hpA, hpB:last.hpB });
+    }
+    buf = [];
+  };
+  log.forEach(e => {
+    if (e.kind === 'round') return;
+    if (e.kind === 'hit' || e.kind === 'miss') buf.push(e);
+    else { flush(); out.push(e); }
+  });
+  flush();
+  return out;
+}
+
+async function startPracticeFight() {
+  const own = app.server.vault().find(i => i.uid === practice.ownUid);
+  if (!own) { openPracticePicker(); return; }
+  const myToken = ++practice.token;
+  practice.skip = false;
+  practice.running = true;
+  const feed = $('#practiceFeed');
+  const button = $('#practiceGo');
+  feed.innerHTML = '';
+  button.textContent = 'やり直す';
+  button.classList.add('running');
+  let result;
+  try {
+    result = app.server.practiceBattle(practice.ownUid, practice.enemyId, practiceStage(), practice.enemyInd);
+  } catch (e) {
+    practice.running = false;
+    toast(e.message);
+    return;
+  }
+  const names = [result.A.name, result.B.name];
+  practiceCorner(0, result.A.maxHp, result.A.maxHp);
+  practiceCorner(1, result.B.maxHp, result.B.maxHp);
+  const wait = ms => new Promise(resolve => setTimeout(resolve, practice.skip ? 0 : practice.fast ? ms / 4 : ms));
+  for (const event of compressPracticeLog(result.log, names)) {
+    if (myToken !== practice.token || !practice.open) return;
+    feed.insertAdjacentHTML('beforeend', practiceEventHtml(event, names));
+    if (event.hpA != null) {
+      practiceCorner(0, event.hpA, result.A.maxHp);
+      practiceCorner(1, event.hpB, result.B.maxHp);
+    }
+    if (!practice.skip) {
+      feed.scrollTop = feed.scrollHeight;
+      await wait(event.kind === 'skill' || event.kind === 'big' ? 900 : event.kind === 'sum' ? 700 : 500);
+    }
+  }
+  if (myToken !== practice.token || !practice.open) return;
+  practiceCorner(0, result.A.hp, result.A.maxHp);
+  practiceCorner(1, result.B.hp, result.B.maxHp);
+  const winner = result.winner == null ? null : names[result.winner];
+  feed.insertAdjacentHTML('beforeend', `<div class="practice-result"><h2>${winner ? `${esc(winner)}の勝ち` : '引き分け'}</h2><p>${esc(result.reason)}／${result.rounds}ラウンド</p></div>`);
+  feed.scrollTop = feed.scrollHeight;
+  practice.running = false;
+  button.textContent = 'もう一度';
+  button.classList.remove('running');
+}
+
+function renderPracticeBattle() {
+  if (practice.running) { practice.token++; practice.running = false; }
+  practice.open = true;
+  document.body.classList.add('practice-mode');
+  const presetOptions = PRACTICE_STAGES.map((s, i) => `<option value="${i}" ${i === practice.stageIndex ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
+  $('#main').innerHTML = `<section class="practice-battle">
+    <div class="practice-top"><button class="practice-mini practice-back" id="practiceBack">← 冒険</button><h1>対戦（練習試合）</h1></div>
+    <div class="practice-versus"><div class="practice-corner" id="practiceCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="practiceCorner1"></div></div>
+    <div class="practice-stage"><div class="practice-stage-row"><label for="practiceStage">舞台</label><select id="practiceStage">${presetOptions}<option value="custom" ${practice.stageIndex < 0 ? 'selected' : ''}>オリジナルの舞台</option></select><button class="practice-mini" id="practiceFeatures">特徴</button></div><p class="practice-feature-line">特徴：${practice.features.length ? practice.features.map(esc).join('・') : 'なし'}</p></div>
+    <div class="practice-feed" id="practiceFeed" aria-live="polite"></div>
+    <div class="practice-actions"><button id="practiceReroll">相手を<br>引き直す</button><button id="practiceSpeed">実況：<br>${practice.fast ? 'はやい' : 'ふつう'}</button><button id="practiceSkip">結果まで<br>飛ばす</button><button class="go" id="practiceGo">戦わせる</button></div>
+  </section>`;
+  practiceCorner(0);
+  practiceCorner(1);
+  $('#practiceBack').onclick = () => show('adventure');
+  $('#practiceFeatures').onclick = openPracticeFeatures;
+  $('#practiceStage').onchange = e => {
+    if (e.target.value === 'custom') { practice.stageIndex = -1; return; }
+    practice.stageIndex = Number(e.target.value);
+    practice.features = PRACTICE_STAGES[practice.stageIndex].features.slice();
+    renderPracticeBattle();
+  };
+  $('#practiceReroll').onclick = () => { practice.enemyInd = app.server.rollPracticeEnemy(practice.enemyId); practiceCorner(1); };
+  $('#practiceSpeed').onclick = e => { practice.fast = !practice.fast; e.currentTarget.innerHTML = `実況：<br>${practice.fast ? 'はやい' : 'ふつう'}`; };
+  $('#practiceSkip').onclick = () => { practice.skip = true; };
+  $('#practiceGo').onclick = startPracticeFight;
+}
+
+function openPracticeBattle(enemyCharId = '') {
+  const vault = app.server.vault();
+  if (!practice.ownUid || !vault.some(i => i.uid === practice.ownUid)) practice.ownUid = vault[0] ? vault[0].uid : null;
+  if (enemyCharId && app.charMap[enemyCharId]) practice.enemyId = enemyCharId;
+  if (!app.charMap[practice.enemyId]) practice.enemyId = app.chars[0].id;
+  practice.enemyInd = app.server.rollPracticeEnemy(practice.enemyId);
+  practice.stageIndex = 0;
+  practice.features = [];
+  app.tab = 'adventure';
+  renderPracticeBattle();
+  if (!practice.ownUid) toast('先にガチャで個体を仲間にしてください');
+}
+
+// 冒険には日課・探索と練習試合の入口を表示する。
 function renderAdventure() {
   const main = $('#main');
-  main.innerHTML = '<div id="dailyArea"></div>';
+  main.innerHTML = `<section class="panel practice-entry"><h2>対戦（練習試合）</h2><p class="muted small" style="margin:0 0 8px">保管庫の個体を選び、10体のキャラや好きな舞台と戦えます。報酬はありません。</p><button class="btn primary wide" id="openPractice">練習試合を始める</button></section><div id="dailyArea"></div>`;
+  $('#openPractice').onclick = () => openPracticeBattle();
   renderDaily($('#dailyArea'));
 }
 
@@ -1678,7 +1914,7 @@ async function boot() {
       if (document.visibilityState !== 'visible' || !app.server) return;
       const info = app.server.dailyLogin();
       if (info) showLoginBonus(info);
-      if (!$('.show')) render();
+      if (!$('.show') && !practice.open) render();
     });
   } catch (e) {
     $('#main').innerHTML = `<p class="error">起動できませんでした：${esc(e.message)}</p>`;

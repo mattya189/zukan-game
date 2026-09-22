@@ -365,6 +365,67 @@ body.selecting .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
 
 /* ---------- 冒険 ---------- */
 .panel { background: var(--paper); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+.practice-entry { border: 2px solid var(--ink); background: linear-gradient(135deg, #fff, #FFF3C4); }
+.practice-entry h2 { margin: 0 0 4px; }
+
+/* ---------- 練習試合 ---------- */
+body.practice-mode { overflow: hidden; }
+body.practice-mode header.top, body.practice-mode nav.tabs { display: none; }
+body.practice-mode .app { height: 100vh; height: 100dvh; min-height: 0; padding: 0; }
+body.practice-mode main { height: 100%; padding: 0; overflow: hidden; }
+.practice-battle { height: 100%; padding: max(6px, env(safe-area-inset-top)) 8px max(6px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
+.practice-top { flex: none; display: flex; align-items: center; gap: 7px; min-height: 30px; }
+.practice-top h1 { margin: 0; font-family: var(--dot); font-size: 16px; font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.practice-mini { border: 1.5px solid var(--line); background: var(--paper); border-radius: 99px; padding: 2px 9px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.practice-back { margin-right: auto; }
+.practice-versus { flex: 0 1 42%; min-height: 170px; display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 5px; align-items: stretch; }
+.practice-vs { align-self: center; font-family: var(--dot); font-size: 21px; color: var(--red); }
+.practice-corner { --c: var(--ink); min-width: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px; border-radius: 11px; border-top: 5px solid var(--c); background: var(--paper); }
+.practice-art { position: relative; flex: 1 1 auto; min-height: 76px; overflow: hidden; border-radius: 8px; background: radial-gradient(circle at 50% 65%, color-mix(in srgb, var(--c) 20%, transparent), transparent 70%); }
+.practice-art img { position: absolute; inset: 2px; width: calc(100% - 4px); height: calc(100% - 4px); object-fit: contain; object-position: center bottom; }
+.practice-name { border: 0; width: 100%; padding: 1px 3px; background: #E8EDF5; border-radius: 6px; font-size: 11px; line-height: 1.45; font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+select.practice-name { border: 1px solid var(--line); }
+.practice-grade { color: var(--ink-soft); font-size: 10px; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.practice-grade b { display: inline-block; margin-right: 3px; padding: 0 5px; border-radius: 5px; background: var(--c); color: #fff; font-family: var(--dot); font-weight: 400; }
+.practice-ind { display: flex; justify-content: space-between; gap: 1px; color: var(--ink-soft); font-size: 9px; white-space: nowrap; overflow: hidden; }
+.practice-ind b { margin-left: 1px; color: var(--ink); font-family: var(--dot); font-size: 10px; font-weight: 400; }
+.practice-hpbar { height: 8px; overflow: hidden; border-radius: 99px; background: #CCD4E0; }
+.practice-hpbar i { display: block; height: 100%; background: var(--green); transition: width .3s; }
+.practice-hpbar i.low { background: var(--red); }
+.practice-hpnum { min-height: 1.15em; margin-top: -2px; text-align: right; font-family: var(--dot); font-size: 10px; }
+.practice-stage { flex: none; padding: 5px 7px; border-radius: 10px; background: var(--paper); }
+.practice-stage-row { display: flex; gap: 6px; align-items: center; }
+.practice-stage-row label { font-size: 11px; font-weight: 700; }
+.practice-stage-row select { flex: 1; min-width: 0; padding: 3px 5px; font-size: 11px; }
+.practice-feature-line { margin: 1px 0 0; color: var(--ink-soft); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.practice-feed { flex: 1 1 auto; min-height: 82px; overflow-y: auto; overscroll-behavior: contain; padding: 6px 8px; border-radius: 10px; background: var(--paper); }
+.practice-feed:empty::before { content: "個体と舞台を選んで「戦わせる」を押してください。"; color: var(--ink-soft); font-size: 12px; }
+.practice-feed .ev { margin: 0 0 5px; font-size: 13px; }
+.practice-feed .ev.stage, .practice-feed .ev.talk { font-weight: 900; }
+.practice-feed .ev.info, .practice-feed .ev.miss { color: var(--ink-soft); }
+.practice-feed .ev.skill { padding: 3px 7px; border-left: 4px solid var(--gold); background: #FFF3C4; font-weight: 700; }
+.practice-feed .ev.big { padding: 3px 7px; border-left: 4px solid var(--red); background: #FCE4E6; font-weight: 900; }
+.practice-feed .ev.sum { padding: 3px 7px; border-radius: 7px; background: #fff; color: var(--ink-soft); font-size: 11px; }
+.practice-feed .ev b.s0 { color: #2F6FD6; } .practice-feed .ev b.s1 { color: var(--red); }
+.practice-feed .note { display: block; color: var(--ink-soft); font-size: 10px; font-weight: 500; }
+.practice-result { margin-top: 6px; padding: 8px; border-radius: 10px; background: var(--ink); color: var(--paper); text-align: center; }
+.practice-result h2 { margin: 0; font-family: var(--dot); font-size: 20px; font-weight: 400; }
+.practice-result p { margin: 1px 0 0; font-size: 11px; }
+.practice-actions { flex: none; display: grid; grid-template-columns: 1fr 1fr 1fr 1.35fr; gap: 4px; }
+.practice-actions button { min-width: 0; padding: 7px 1px; border: 2px solid var(--ink); border-radius: 10px; background: var(--paper); font-size: 10px; line-height: 1.25; font-weight: 900; }
+.practice-actions .go { background: var(--red); border-color: var(--red); color: #fff; font-size: 13px; }
+.practice-actions .go.running { background: var(--paper); color: var(--red); }
+.practice-features { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.practice-features button { border: 1.5px solid var(--line); background: #fff; border-radius: 99px; padding: 2px 9px; font-size: 12px; font-weight: 700; }
+.practice-features button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
+.practice-pick-list { max-height: 52vh; overflow-y: auto; }
+@media (max-height: 680px) {
+  .practice-battle { gap: 3px; }
+  .practice-versus { min-height: 142px; }
+  .practice-ind { display: none; }
+  .practice-grade, .practice-hpnum { font-size: 9px; }
+  .practice-actions button { padding-block: 5px; }
+}
 .streak { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 6px; }
 .streak div { text-align: center; border-radius: 8px; padding: 4px 0; background: #E6EBF3; font-size: 11px; font-weight: 700; color: var(--ink-soft); }
 .streak div b { display: block; font-family: var(--dot); font-weight: 400; font-size: 13px; color: var(--ink); }
@@ -740,7 +801,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/characters.js', 'data/rules.js', 'js/game.js'];
+  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;
