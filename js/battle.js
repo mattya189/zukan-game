@@ -11,6 +11,7 @@
 //     res.log    … 実況（{ round, kind, text, side, dmg, hpA, hpB, note }）。kind は stage/round/talk/info/skill/big/hit/miss/event
 //     res.A, res.B … { name, hp, maxHp }　　res.rounds, res.reason
 //   キャラに必要な項目：id, name, grade, resolve, tags, stats{atk,def,wis,spd,sta,amb}
+//   クエスト用：stage.enemyPower（敵の強さ）、stage.enemyState(ctx, 敵, 自分)、res.state（挑戦目標の判定用の記録）
 //   新しいキャラを追加するときは、FIGHTER_KITS に部品を足し、KIT_TUNE に補正値（最初は1）を足す
 // =====================================================================
 
@@ -102,7 +103,8 @@ function makeFighter(ch, ind, side, stage) {
     mentalRes: 1,        // 精神攻撃の受けやすさ（覚悟とキャラの特性で決まる）
     meters: {},          // キャラごとのゲージ（激しさ、分析、自信など）
     flags: {},           // 1回だけの技の使用済みなど
-    dmgDealt: 0, dmgTaken: 0, hitsLanded: 0, forfeit: false, ambUsed: false
+    dmgDealt: 0, dmgTaken: 0, hitsLanded: 0, forfeit: false, ambUsed: false,
+    rec: { stunned: 0, bound: false, boundRounds: 0, debuffs: 0, spdDown: 0, evaded: 0, shieldBroken: 0, minHp: 1, hpAtR5: 1, takenByR8: 0 }   // 挑戦目標の判定用の記録
   };
   f.mentalRes = RESOLVE_INFO[f.resolve].mental * (kit.mentalRes ?? 1);
   kit.init?.(f);        // ゲージの準備（舞台の「敵の状態」より前に行う）
@@ -133,6 +135,7 @@ function statOf(f, stat) {
 }
 function addMod(f, m) {
   if (m.key) f.mods = f.mods.filter(x => x.key !== m.key);
+  if (f.rec && m.mul < 1 && !m.permanent && !String(m.key || '').startsWith('stage_')) { f.rec.debuffs++; if (m.stat === 'spd') f.rec.spdDown++; }
   f.mods.push({ turns: 99, ...m });
 }
 function hasFeature(ctx, name) { return ctx.stage.features.includes(name); }
@@ -178,7 +181,7 @@ function runBattle(opts) {
     ctx.say('talk', `${f.name}「${ctx.line(f, 'intro')}」`, { side: f.side });
     if (f.resolve === 'high' && ctx.foe(f).tags.has('精神干渉')) ctx.say('info', `${f.name}は、死も敗北も理解したうえで戦いに臨んでいる`, { side: f.side });
   }
-  stage.enemyState?.(ctx, B);
+  stage.enemyState?.(ctx, B, A);
   for (const f of [A, B]) f.kit.onStart?.(ctx, f, ctx.foe(f));
 
   while (A.hp > 0 && B.hp > 0 && ctx.round < BATTLE_RULES.MAX_ROUNDS && !A.forfeit && !B.forfeit) {
@@ -219,14 +222,17 @@ function roundEnd(ctx) {
     const expired = f.mods.filter(m => m.turns <= 0 && m.onExpire);
     f.mods = f.mods.filter(m => m.turns > 0);
     expired.forEach(m => m.onExpire(ctx, f));
-    if (f.bind > 0) f.bind--;
+    if (f.bind > 0) { f.rec.bound = true; f.rec.boundRounds++; f.bind--; }
+    f.rec.minHp = Math.min(f.rec.minHp, Math.max(0, f.hp) / f.maxHp);
+    if (ctx.round === 5) f.rec.hpAtR5 = Math.max(0, f.hp) / f.maxHp;
+    if (ctx.round === 8) f.rec.takenByR8 = f.dmgTaken / f.maxHp;
   }
 }
 
 function act(ctx, f, extra = false) {
   const foe = ctx.foe(f);
   if (f.stun > 0) {
-    f.stun--;
+    f.stun--; f.rec.stunned++;
     if (f.kit.onStunned?.(ctx, f, foe)) return;
     ctx.say('info', `${f.name}は動けない`, { side: f.side });
     return;
@@ -259,6 +265,7 @@ function doAttack(ctx, f, foe, opt = {}) {
     if (ctx.evasionNegated(foe) || opt.sure) eva = 0;
     const hitChance = opt.sure ? 1 : clamp(acc - eva, 0.4, 0.98);
     if (!r.chance(hitChance)) {
+      foe.rec.evaded++;
       if (h === 0) ctx.say('miss', `${f.name}の${opt.name || '攻撃'}――${foe.name}はかわした`, { side: f.side });
       continue;
     }
@@ -279,6 +286,7 @@ function doAttack(ctx, f, foe, opt = {}) {
     if (ctx.feat('歓声') && ctx.firstHit === f) dmg *= 1.05;
     if (f.kit.damageOut) dmg = f.kit.damageOut(ctx, f, foe, dmg, opt) ?? dmg;
     dmg *= ((typeof KIT_TUNE !== 'undefined' && KIT_TUNE[f.ch.id]) || 1) * (f.form || 1);
+    if (f.side === 1 && ctx.stage.enemyPower) dmg *= ctx.stage.enemyPower;   // ステージごとの敵の強さ
     const res = applyDamage(ctx, f, foe, dmg, { crit, big: opt.big, name: opt.name });
     total += res; landed++;
     if (!ctx.firstHit) ctx.firstHit = f;
@@ -299,6 +307,7 @@ function applyDamage(ctx, src, tgt, amount, info = {}) {
   if (tgt.shield > 0 && !info.ignoreShield) {
     const absorbed = Math.min(tgt.shield, dmg);
     tgt.shield -= absorbed; dmg -= absorbed;
+    if (tgt.shield <= 0 && dmg > 0) tgt.rec.shieldBroken++;
   }
   dmg = Math.max(0, dmg);
   tgt.hp -= dmg; tgt.dmgTaken += dmg;
@@ -331,7 +340,8 @@ function finish(ctx) {
     winner: winner ? winner.side : null, reason, rounds: ctx.round, log: ctx.log, stage: ctx.stage,
     A: { name: A.name, hp: Math.max(0, Math.round(A.hp)), maxHp: A.maxHp },
     B: { name: B.name, hp: Math.max(0, Math.round(B.hp)), maxHp: B.maxHp },
-    key: key ? key.skill || key.text.slice(0, 24) : '地力の差'
+    key: key ? key.skill || key.text.slice(0, 24) : '地力の差',
+    state: [A, B].map(f => ({ rec: f.rec, flags: f.flags, meters: f.meters, resolve: f.resolve, forfeit: f.forfeit, hp: f.hp, maxHp: f.maxHp }))
   };
 }
 
@@ -662,7 +672,7 @@ const FIGHTER_KITS = {
     },
     evasion(ctx, f, attacker, opt) {
       // 肉体防御：ほとんど避けない。ただし致命傷になる大技は野生の勘でかわすことがある
-      if (opt && opt.big && !attacker.flags.mirage) return 0.3;
+      if (opt && opt.big && !attacker.flags.mirage) return f.flags.keen ? 0.5 : 0.3;
       return -0.05;
     },
     damageIn(ctx, f, src, dmg) { return dmg * 0.9; },
@@ -934,6 +944,7 @@ const FIGHTER_KITS = {
       if (ctx.feat('歓声')) loss *= 0.8;
       if (f.flags.steady) loss *= 0.5;
       if (f.flags.smallAltar) loss *= 1.5;
+      if (f.flags.hall) loss *= 0.8;
       f.meters.conf = Math.max(0, f.meters.conf - loss);
       if (ctx.round % 5 === 0 && f.meters.conf > 0) {
         f.meters.conf = Math.min(100, f.meters.conf + 6);
