@@ -422,6 +422,44 @@ select.practice-name { border: 1px solid var(--line); }
 .practice-features button { border: 1.5px solid var(--line); background: #fff; border-radius: 99px; padding: 2px 9px; font-size: 12px; font-weight: 700; }
 .practice-features button[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: #fff; }
 .practice-pick-list { max-height: 52vh; overflow-y: auto; }
+.battle-view-toggle { margin-left:auto; }
+.practice-battle.log-wide .practice-versus { flex-basis:30%; min-height:120px; }
+.practice-battle.log-wide .practice-stage { display:none; }
+.practice-battle.log-wide .practice-feed { min-height:45vh; }
+.practice-mode .practice-feed .ev { font-size:16px; line-height:1.75; }
+.practice-mode .practice-feed .ev.sum { font-size:14px; }
+.practice-mode .practice-feed .note { font-size:12px; }
+.battle-mode-switch { display:grid; grid-template-columns:repeat(3,1fr); gap:4px; margin-bottom:5px; }
+.battle-mode-switch button { border:1.5px solid var(--line); border-radius:8px; padding:4px 2px; background:var(--paper); font-size:11px; font-weight:900; }
+.battle-mode-switch button.active { color:#fff; background:var(--ink); border-color:var(--ink); }
+.team-battle { height:100%; padding:max(6px,env(safe-area-inset-top)) 7px max(6px,env(safe-area-inset-bottom)); display:flex; flex-direction:column; gap:5px; overflow:hidden; }
+.team-field { --mid:50%; flex:0 1 42%; min-height:170px; display:grid; grid-template-columns:var(--team-cols,1fr 1fr 1fr 1fr); gap:3px; position:relative; padding:4px; border-radius:11px; background:var(--paper); }
+.team-field::after { content:""; position:absolute; top:5px; bottom:5px; left:var(--mid); border-left:2px dashed var(--line); pointer-events:none; }
+.team-col { min-width:0; display:flex; flex-direction:column; gap:3px; }
+.team-col-label { flex:none; border-radius:5px; color:#fff; text-align:center; font-size:9px; font-weight:900; line-height:1.5; }
+.team-col.me .team-col-label { background:#2F6FD6; }.team-col.foe .team-col-label { background:var(--red); }
+.team-cells { flex:1; min-height:0; display:grid; grid-auto-rows:1fr; gap:3px; }
+.team-cells.n3 { grid-template-columns:1fr 1fr; }.team-cells.n3 .team-cell:last-child { grid-column:1/-1; }
+.team-cell { min-height:0; position:relative; overflow:hidden; border-radius:7px; background:#fff; }
+.team-cell.empty { border:1.5px dashed var(--line); background:transparent; }
+.team-cell.down { opacity:.35; filter:grayscale(1); }
+.team-cell img { position:absolute; inset:2px 2px 22px; width:calc(100% - 4px); height:calc(100% - 24px); object-fit:contain; object-position:center bottom; }
+.team-cell-cap { position:absolute; left:2px; right:2px; bottom:2px; }
+.team-cell-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center; font-size:9px; line-height:1.3; font-weight:900; }
+.team-cell .practice-hpbar { height:6px; }
+.team-battle.log-wide .team-field { flex-basis:29%; min-height:130px; }
+.team-battle.log-wide .practice-stage { display:none; }
+.team-battle.log-wide .practice-feed { min-height:45vh; }
+.team-compose { display:grid; gap:7px; margin:8px 0; }
+.team-compose-slot { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:7px; padding:6px; border:1.5px solid var(--line); border-radius:10px; background:#fff; }
+.team-compose-slot .art { grid-row:1/3; }.team-compose-slot strong { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.team-compose-slot small { display:block; color:var(--ink-soft); font-size:10px; }
+.team-row-toggle { border:1px solid var(--line); border-radius:7px; padding:4px 7px; background:var(--paper); font-size:11px; font-weight:900; }
+.team-enemies { display:grid; grid-template-columns:repeat(var(--n),minmax(0,1fr)); gap:5px; margin-top:6px; }
+.team-enemy { min-width:0; padding:5px; border-radius:9px; background:#fff; text-align:center; }
+.team-enemy img { width:100%; height:72px; object-fit:contain; object-position:center bottom; }.team-enemy strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }.team-enemy small { font-size:9px; color:var(--ink-soft); }
+.team-mark { border:1px solid var(--line); border-radius:6px; padding:3px 1px; font-size:8px; font-weight:900; text-align:center; }
+.team-mark.locked { color:var(--ink-soft); background:#E6EBF3; }.team-mark.cleared { color:#fff; background:var(--r3); }.team-mark.goal { background:var(--yellow); border-color:var(--gold); }
 .quest-heading { display:flex; align-items:center; gap:8px; margin:14px 0 8px; }
 .quest-heading h2 { margin:0; font-size:17px; }
 .quest-count { margin-left:auto; padding:1px 8px; border-radius:99px; background:var(--ink); color:#fff; font-family:var(--dot); font-size:12px; }
@@ -434,7 +472,7 @@ select.practice-name { border: 1px solid var(--line); }
 .quest-card-head strong { display:block; overflow-wrap:anywhere; font-size:12px; line-height:1.35; }
 .quest-card-head small { display:block; margin-top:3px; color:var(--ink-soft); font-size:10px; line-height:1.3; }
 .quest-proof { position:absolute; top:5px; right:5px; padding:1px 6px; border-radius:99px; background:var(--gold); color:var(--ink); font-size:9px; font-weight:900; }
-.quest-levels { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; margin-top:6px; }
+.quest-levels { display:grid; grid-template-columns:repeat(4,1fr); gap:3px; margin-top:6px; }
 .quest-level { border:1px solid var(--line); border-radius:6px; padding:3px 1px; background:#fff; font-size:9px; font-weight:900; text-align:center; }
 .quest-level.locked { color:var(--ink-soft); background:#E6EBF3; }
 .quest-level.cleared { color:#fff; background:var(--r3); border-color:var(--r3); }
@@ -461,6 +499,7 @@ select.practice-name { border: 1px solid var(--line); }
   .practice-ind { display: none; }
   .practice-grade, .practice-hpnum { font-size: 9px; }
   .practice-actions button { padding-block: 5px; }
+  .team-field { min-height:145px; }.team-battle.log-wide .team-field { min-height:110px; }
 }
 .streak { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-top: 6px; }
 .streak div { text-align: center; border-radius: 8px; padding: 4px 0; background: #E6EBF3; font-size: 11px; font-weight: 700; color: var(--ink-soft); }
@@ -837,7 +876,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'data/stages.js', 'js/game.js'];
+  var files = ['data/characters.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;

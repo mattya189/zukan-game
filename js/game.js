@@ -245,8 +245,10 @@ class GameServer {
     const qp = s.questProgress || {};
     s.questProgress = {
       cleared: qp.cleared || {}, goals: qp.goals || {}, proofs: qp.proofs || {},
-      farmReadyAt: qp.farmReadyAt || {}, arenaStreak: qp.arenaStreak || 0
+      farmReadyAt: qp.farmReadyAt || {}, arenaStreak: qp.arenaStreak || 0,
+      teamCleared: qp.teamCleared || {}, teamGoals: qp.teamGoals || {}
     };
+    s.teamLineups = Object.assign({ 2:{ uids:[], rows:[] }, 3:{ uids:[], rows:[] } }, s.teamLineups || {});
     s.dayOffset = s.dayOffset || 0;
     s.expSeq = s.expSeq || 1;
     for (const ind of s.mine) {
@@ -445,9 +447,58 @@ class GameServer {
     });
   }
 
+  teamLineup(size) {
+    const x = this.s.teamLineups[size] || { uids:[], rows:[] };
+    return { uids:[...x.uids], rows:[...x.rows] };
+  }
+
+  saveTeamLineup(size, uids, rows) {
+    this.s.teamLineups[size] = { uids:uids.map(Number), rows:rows.map(x => x === 'back' ? 'back' : 'front') };
+    this._save();
+  }
+
+  _ownTeam(size, uids, rows) {
+    if (uids.length !== size) throw new Error(`${size}体の個体を選んでください`);
+    const own = uids.map(uid => this._questOwn(uid));
+    if (new Set(own.map(x => x.char_id)).size !== own.length) throw new Error('同じキャラを同じチームに入れることはできません');
+    return own.map((ind,i) => ({ ch:this.charMap[ind.char_id], ind, row:rows[i] === 'back' ? 'back' : 'front' }));
+  }
+
+  teamPracticeBattle(size, uids, rows, enemyTeam, stage) {
+    const mine = this._ownTeam(size, uids, rows);
+    if (!Array.isArray(enemyTeam) || enemyTeam.length !== size) throw new Error(`相手を${size}体選んでください`);
+    if (new Set(enemyTeam.map(x => x.id)).size !== size) throw new Error('相手チームにも同じキャラは入れられません');
+    const foes = enemyTeam.map(x => {
+      const ch=this.charMap[x.id]; if(!ch) throw new Error('相手のキャラが見つかりません');
+      return { ch, ind:x.ind || this.rollPracticeEnemy(x.id), row:x.row === 'back' ? 'back' : 'front' };
+    });
+    this.saveTeamLineup(size,uids,rows);
+    return runTeamBattle({ teams:[mine,foes], stage:stage || { name:'無名の荒野（特徴なし）', features:[] } });
+  }
+
   questProgress() {
     const q = this.s.questProgress;
-    return { cleared:{...q.cleared}, goals:{...q.goals}, proofs:{...q.proofs}, farmReadyAt:{...q.farmReadyAt}, arenaStreak:q.arenaStreak };
+    return { cleared:{...q.cleared}, goals:{...q.goals}, proofs:{...q.proofs}, farmReadyAt:{...q.farmReadyAt}, arenaStreak:q.arenaStreak, teamCleared:{...q.teamCleared}, teamGoals:{...q.teamGoals} };
+  }
+
+  teamQuestUnlocked(stageId) {
+    const st=TEAM_STAGES.find(x=>x.id===stageId);
+    return !!(st && this.s.questProgress.cleared[`q${st.boss.slice(-3)}_3`]);
+  }
+
+  teamQuestBattle(stageId,uids,rows) {
+    const st=TEAM_STAGES.find(x=>x.id===stageId);
+    if(!st) throw new Error('集団戦クエストが見つかりません');
+    if(!this.teamQuestUnlocked(stageId)) throw new Error('このキャラの段階3をクリアすると挑戦できます');
+    const mine=this._ownTeam(st.size,uids,rows);
+    const foes=st.enemies.map(x=>({ch:this.charMap[x.id],ind:{...TEAM_ENEMY_IND},row:x.row}));
+    const res=runTeamBattle({teams:[mine,foes],stage:{name:st.name,features:[...st.features],events:st.events,enemyState:st.enemyState,enemyPower:TEAM_STAGE_POWER[st.id]}});
+    const q=this.s.questProgress,cleared=res.winner===0,first=cleared&&!q.teamCleared[st.id];
+    const goalDone=cleared&&!!st.goal?.check(res),goalFirst=goalDone&&!q.teamGoals[st.id];
+    let reward=0;
+    if(cleared){reward=first?TEAM_REWARDS.first:TEAM_REWARDS.repeat;if(goalFirst)reward+=TEAM_REWARDS.goal;q.teamCleared[st.id]=true;if(goalDone)q.teamGoals[st.id]=true;this.s.player.coins+=reward;this._progress('quest',1);}
+    this.saveTeamLineup(st.size,uids,rows);this._save();
+    return {...res,quest:{stageId,cleared,first,goalDone,goalFirst,reward}};
   }
 
   questUnlocked(stageId) {
@@ -704,8 +755,9 @@ const PRACTICE_STAGES = [
   { name:'神魔の玉座', features:['祭壇','歓声'] },
   { name:'神々の遺跡', features:['岩場','夜空','異界'] }
 ];
-const practice = { open:false, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false };
-const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false };
+const practice = { open:false, mode:1, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false, expanded:false };
+const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false, expanded:false };
+const teamView = { quest:false, stageId:null, size:2, uids:[], rows:[], enemies:[], token:0, fast:false, skip:false, running:false, expanded:false, result:null };
 let adventureView = 'home';
 
 const $ = s => document.querySelector(s);
@@ -1713,7 +1765,11 @@ function questSectionsHtml() {
       const label = goal ? `段階${st.level} ★` : cleared ? `段階${st.level} ✓` : unlocked ? `段階${st.level}` : `段階${st.level} 🔒`;
       return `<button class="quest-level ${cls}" data-quest-stage="${st.id}" ${unlocked ? '' : 'disabled'}>${label}</button>`;
     }).join('');
-    return `<article class="quest-card ${progress.proofs[c.id] ? 'proof' : ''}">${progress.proofs[c.id] ? '<span class="quest-proof">撃破の証</span>' : ''}<div class="quest-card-head">${art(c,{size:48})}<span><strong>No.${String(index+1).padStart(3,'0')} ${esc(c.name)}</strong><small>${c.grade}級・${esc(ZUKAN_GRADE_INFO[c.grade][0])}</small></span></div><div class="quest-levels">${levels}</div></article>`;
+    const team=TEAM_STAGES.find(x=>x.boss===c.id),teamUnlocked=team&&app.server.teamQuestUnlocked(team.id),teamClear=team&&progress.teamCleared[team.id],teamGoal=team&&progress.teamGoals[team.id];
+    const teamCls=teamGoal?'goal':teamClear?'cleared':teamUnlocked?'':'locked';
+    const teamLabel=teamGoal?'集団 ★':teamClear?'集団 ✓':teamUnlocked?'集団戦':'集団 🔒';
+    const teamMark=team?`<button class="quest-level team-mark ${teamCls}" data-team-stage="${team.id}" ${teamUnlocked?'':'disabled'}>${teamLabel}</button>`:'';
+    return `<article class="quest-card ${progress.proofs[c.id] ? 'proof' : ''}">${progress.proofs[c.id] ? '<span class="quest-proof">撃破の証</span>' : ''}<div class="quest-card-head">${art(c,{size:48})}<span><strong>No.${String(index+1).padStart(3,'0')} ${esc(c.name)}</strong><small>${c.grade}級・${esc(ZUKAN_GRADE_INFO[c.grade][0])}</small></span></div><div class="quest-levels">${levels}${teamMark}</div></article>`;
   }).join('');
   const farms = FARM_STAGES.map(st => {
     const rest = farmRemaining(st.id), streak = st.id === 'farm_2' ? `　${progress.arenaStreak}連勝中` : '';
@@ -1724,6 +1780,7 @@ function questSectionsHtml() {
 
 function bindQuestSections(root = document) {
   root.querySelectorAll('[data-quest-stage]').forEach(b => b.onclick = () => openQuestDetail(b.dataset.questStage));
+  root.querySelectorAll('[data-team-stage]').forEach(b => b.onclick = () => openTeamQuestDetail(b.dataset.teamStage));
 }
 
 function questRewardText(st) {
@@ -1734,6 +1791,115 @@ function questRewardText(st) {
   }
   const rw = QUEST_REWARDS[st.level];
   return `初回 ${num(rw.first)}／2回目以降 ${num(rw.repeat)}／目標初達成 +${num(rw.goal)}コイン${st.level === 3 ? ' ＋ 撃破の証' : ''}`;
+}
+
+function preferredRow(c) { return (c.tags || []).some(x => x === '遠距離' || x === '飛行') ? 'back' : 'front'; }
+
+function prepareTeam(size, quest = false) {
+  teamView.size=size; teamView.quest=quest;
+  const vault=app.server.vault(), saved=app.server.teamLineup(size), used=new Set(), uids=[], rows=[];
+  for(let i=0;i<size;i++){
+    let ind=vault.find(x=>x.uid===saved.uids[i]&&!used.has(x.char_id));
+    if(!ind) ind=vault.find(x=>!used.has(x.char_id));
+    if(ind){uids.push(ind.uid);used.add(ind.char_id);rows.push(saved.rows[i]||preferredRow(app.charMap[ind.char_id]));}
+  }
+  teamView.uids=uids;teamView.rows=rows;
+  if(!quest){
+    const ids=app.chars.slice(0,size).map(x=>x.id);
+    teamView.enemies=ids.map((id,i)=>({id,row:preferredRow(app.charMap[id]),ind:app.server.rollPracticeEnemy(id)}));
+  }
+}
+
+function teamSelectedHtml() {
+  return Array.from({length:teamView.size},(_,i)=>{
+    const ind=app.server.vault().find(x=>x.uid===teamView.uids[i]),c=ind&&app.charMap[ind.char_id];
+    return `<div class="team-compose-slot">${c?art(c,{ind,size:44}):'<div class="art" style="width:44px;height:44px"></div>'}<span><strong>${c?esc(c.name):'個体未選択'}</strong>${ind?`<small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small>`:''}</span><button class="team-row-toggle" data-team-row="${i}">${teamView.rows[i]==='back'?'後衛':'前衛'}</button><button class="btn" data-team-pick="${i}" style="grid-column:2/4;padding:3px">個体を選ぶ</button></div>`;
+  }).join('');
+}
+
+function bindTeamComposer(root,onChange) {
+  root.querySelectorAll('[data-team-row]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.teamRow);teamView.rows[i]=teamView.rows[i]==='back'?'front':'back';onChange();});
+  root.querySelectorAll('[data-team-pick]').forEach(b=>b.onclick=()=>openTeamOwnPicker(Number(b.dataset.teamPick),onChange));
+}
+
+function openTeamOwnPicker(slot,onChange,filter='') {
+  const list=app.server.vault().filter(x=>!filter||x.char_id===filter);
+  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="practice-pick-list"><ul class="rows">${list.map(ind=>{const c=app.charMap[ind.char_id],titles=(ind.titles||[]).map(titleName).filter(Boolean);return `<li><button class="row" data-team-own="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`;}).join('')||'<li class="muted small">該当する個体がいません</li>'}</ul></div>`);
+  body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value);
+  body.querySelectorAll('[data-team-own]').forEach(b=>b.onclick=()=>{const uid=Number(b.dataset.teamOwn),ind=app.server.vault().find(x=>x.uid===uid),other=teamView.uids.some((x,i)=>i!==slot&&app.server.vault().find(v=>v.uid===x)?.char_id===ind.char_id);if(other){toast('同じキャラを同じチームに入れることはできません');return;}teamView.uids[slot]=uid;teamView.rows[slot]=teamView.rows[slot]||preferredRow(app.charMap[ind.char_id]);closeDialog();if($('#teamOwnCompose')||$('#battleTeamCompose'))onChange();else renderTeamBattle(teamView.quest);});
+}
+
+function teamEnemyCards(st) {
+  const enemies=st?st.enemies:teamView.enemies;
+  return `<div class="team-enemies" style="--n:${enemies.length}">${enemies.map(x=>{const c=app.charMap[x.id],src=artSrc(c,1,true);return `<div class="team-enemy">${src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,null,false,1,1)}<strong>${esc(c.name)}</strong><small>${x.row==='back'?'後衛':'前衛'}</small></div>`;}).join('')}</div>`;
+}
+
+function openTeamQuestDetail(stageId) {
+  const st=TEAM_STAGES.find(x=>x.id===stageId);if(!st)return;
+  teamView.stageId=stageId;prepareTeam(st.size,true);practice.open=false;document.body.classList.remove('practice-mode');
+  const draw=()=>{$('#teamOwnCompose').innerHTML=teamSelectedHtml();bindTeamComposer($('#teamOwnCompose'),draw);$('#startTeamQuest').disabled=teamView.uids.length!==st.size;};
+  const featureText=st.features.map(f=>`<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>')||'なし';
+  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="teamQuestBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>${esc(st.name)}</h2><p>${st.size}対${st.size}・集団戦</p></span></div><div class="quest-info"><dl><dt>物語</dt><dd>${esc(st.story)}</dd><dt>相手チーム</dt><dd>${teamEnemyCards(st)}</dd><dt>舞台の特徴</dt><dd>${featureText}</dd><dt>敵の状態</dt><dd>${esc(st.enemyText||'なし')}</dd><dt>出来事</dt><dd>${esc(st.eventText||'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text||'なし')}</dd><dt>報酬</dt><dd>初回 ${num(TEAM_REWARDS.first)}／2回目以降 ${num(TEAM_REWARDS.repeat)}／目標初達成 +${num(TEAM_REWARDS.goal)}コイン</dd></dl></div><h3 class="sec">挑戦するチーム</h3><div class="team-compose" id="teamOwnCompose"></div><button class="btn danger wide" id="startTeamQuest">挑戦する</button></section>`;
+  $('#teamQuestBack').onclick=renderAdventure;$('#startTeamQuest').onclick=()=>renderTeamBattle(true);draw();
+}
+
+function openTeamEnemyEditor() {
+  const draw=()=>{
+    const body=openDialog(`<h2 style="margin:0 0 5px">相手チーム</h2><p class="muted small" style="margin:0">同じキャラは選べません。</p><div class="team-compose">${teamView.enemies.map((x,i)=>`<div class="team-compose-slot">${art(app.charMap[x.id],{size:44})}<span><select data-enemy-char="${i}" style="max-width:100%">${app.chars.map(c=>`<option value="${c.id}" ${c.id===x.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select><small>パ ${num(x.ind.power)}　速 ${num(x.ind.speed)}　賢 ${num(x.ind.wisdom)}</small></span><button class="team-row-toggle" data-enemy-row="${i}">${x.row==='back'?'後衛':'前衛'}</button></div>`).join('')}</div><button class="btn wide" id="enemyReroll">相手を引き直す</button><button class="btn primary wide" id="enemyDone" style="margin-top:6px">決定</button>`);
+    body.querySelectorAll('[data-enemy-char]').forEach(s=>s.onchange=()=>{const id=s.value,i=Number(s.dataset.enemyChar);if(teamView.enemies.some((x,j)=>j!==i&&x.id===id)){toast('相手チームにも同じキャラは入れられません');s.value=teamView.enemies[i].id;return;}teamView.enemies[i]={id,row:preferredRow(app.charMap[id]),ind:app.server.rollPracticeEnemy(id)};draw();});
+    body.querySelectorAll('[data-enemy-row]').forEach(b=>b.onclick=()=>{const x=teamView.enemies[Number(b.dataset.enemyRow)];x.row=x.row==='back'?'front':'back';draw();});
+    body.querySelector('#enemyReroll').onclick=()=>{teamView.enemies.forEach(x=>x.ind=app.server.rollPracticeEnemy(x.id));draw();};
+    body.querySelector('#enemyDone').onclick=()=>{closeDialog();renderTeamBattle(false);};
+  };draw();
+}
+
+function openTeamStagePicker() {
+  const body=openDialog(`<h2 style="margin:0 0 8px">舞台を選ぶ</h2><select id="teamStagePick" style="width:100%">${PRACTICE_STAGES.map((s,i)=>`<option value="${i}" ${i===practice.stageIndex?'selected':''}>${esc(s.name)}</option>`).join('')}<option value="custom" ${practice.stageIndex<0?'selected':''}>オリジナルの舞台</option></select><button class="btn wide" id="teamCustomFeatures" style="margin-top:8px">特徴を選ぶ</button><button class="btn primary wide" id="teamStageDone" style="margin-top:8px">決定</button>`);
+  body.querySelector('#teamStagePick').onchange=e=>{if(e.target.value==='custom'){practice.stageIndex=-1;}else{practice.stageIndex=Number(e.target.value);practice.features=PRACTICE_STAGES[practice.stageIndex].features.slice();}};
+  body.querySelector('#teamCustomFeatures').onclick=()=>openPracticeFeatures(()=>renderTeamBattle(false));
+  body.querySelector('#teamStageDone').onclick=()=>{closeDialog();teamView.expanded=false;renderTeamBattle(false);};
+}
+
+function teamColumnWeight(n){return n===0?.5:n===1?1:n===2?1.1:1.8;}
+function renderTeamField(fighters) {
+  const field=$('#teamField');if(!field)return;
+  const defs=[[0,'back','後衛'],[0,'front','前衛'],[1,'front','前衛'],[1,'back','後衛']];
+  const groups=defs.map(([side,row])=>fighters.filter(f=>f.side===side&&f.row===row)),weights=groups.map(g=>teamColumnWeight(g.length)),total=weights.reduce((a,b)=>a+b,0),mid=(weights[0]+weights[1])/total*100;
+  field.style.setProperty('--team-cols',weights.map(x=>`${x}fr`).join(' '));field.style.setProperty('--mid',`${mid}%`);
+  field.innerHTML=groups.map((g,i)=>`<div class="team-col ${i<2?'me':'foe'}"><div class="team-col-label">${defs[i][2]}</div><div class="team-cells n${g.length}">${g.length?g.map(f=>{const c=app.charMap[f.id],src=artSrc(c,1,true),pct=f.maxHp?Math.max(0,f.hp)/f.maxHp*100:100;return `<div class="team-cell ${f.hp<=0?'down':''}">${src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,null,false,1,1)}<div class="team-cell-cap"><div class="team-cell-name">${esc(c.name)}</div><div class="practice-hpbar"><i class="${pct<=30?'low':''}" style="width:${pct}%"></i></div></div></div>`;}).join(''):'<div class="team-cell empty"></div>'}</div></div>`).join('');
+}
+
+function initialTeamFighters() {
+  const own=teamView.uids.map((uid,i)=>{const ind=app.server.vault().find(x=>x.uid===uid),c=ind&&app.charMap[ind.char_id];return c&&{side:0,id:c.id,name:c.name,row:teamView.rows[i],hp:1,maxHp:1};}).filter(Boolean);
+  const st=teamView.quest&&TEAM_STAGES.find(x=>x.id===teamView.stageId),foes=(st?st.enemies:teamView.enemies).map(x=>({side:1,id:x.id,name:app.charMap[x.id].name,row:x.row,hp:1,maxHp:1}));
+  return own.concat(foes);
+}
+
+function compressTeamLog(log) {
+  const out=[];let buf=[];const flush=()=>{if(!buf.length)return;const rounds=[...new Set(buf.map(e=>e.round))],last=buf.at(-1);if(rounds.length<=1)out.push(...buf);else{const d=[0,0];buf.forEach(e=>{if(e.dmg&&e.side!=null)d[e.side]+=e.dmg;});out.push({kind:'sum',round:last.round,text:`ラウンド${rounds[0]}〜${rounds.at(-1)}：乱戦が続く（自分のチームが${d[0]}、相手のチームが${d[1]}ダメージ）`,hp:last.hp});}buf=[];};
+  log.forEach(e=>{if(e.kind==='round')return;if(e.kind==='hit'||e.kind==='miss')buf.push(e);else{flush();out.push(e);}});flush();return out;
+}
+
+function renderTeamBattle(quest=teamView.quest) {
+  if(teamView.running){teamView.token++;teamView.running=false;}teamView.quest=quest;practice.open=true;document.body.classList.add('practice-mode');
+  const st=quest?TEAM_STAGES.find(x=>x.id===teamView.stageId):null,title=st?st.name:`${teamView.size}対${teamView.size} 練習試合`;
+  $('#main').innerHTML=`<section class="team-battle ${teamView.expanded?'log-wide':''}" id="teamBattle"><div class="practice-top"><button class="practice-mini practice-back" id="teamBack">← ${quest?'一覧':'冒険'}</button><h1>${esc(title)}</h1><button class="practice-mini battle-view-toggle" id="teamViewToggle">${teamView.expanded?'絵を大きく':'実況を広く'}</button></div>${quest?'':`<div class="battle-mode-switch">${[1,2,3].map(n=>`<button data-battle-mode="${n}" class="${n===teamView.size?'active':''}">${n}対${n}</button>`).join('')}</div>`}<div class="team-field" id="teamField"></div><div class="practice-stage"><div class="practice-stage-row"><b>${st?'集団戦クエスト':'舞台：'+esc(practiceStage().name)}</b><button class="practice-mini" id="editOwnTeam">味方編成</button>${st?'':'<button class="practice-mini" id="editTeamStage">舞台</button><button class="practice-mini" id="editEnemyTeam">相手編成</button>'}</div><p class="practice-feature-line">特徴：${(st?st.features:practiceStage().features).map(esc).join('・')||'なし'}${st?`　／　目標：${esc(st.goal.text)}`:''}</p></div><div class="practice-feed" id="teamFeed" aria-live="polite"></div><div class="practice-actions"><button id="teamReroll">編成を<br>選び直す</button><button id="teamSpeed">実況：<br>${teamView.fast?'はやい':'ふつう'}</button><button id="teamSkip">結果まで<br>飛ばす</button><button class="go" id="teamGo">戦わせる</button></div></section>`;
+  renderTeamField(initialTeamFighters());
+  const back=()=>{practice.open=false;teamView.token++;document.body.classList.remove('practice-mode');quest?renderAdventure():show('adventure');};$('#teamBack').onclick=back;
+  $('#teamViewToggle').onclick=e=>{teamView.expanded=!teamView.expanded;$('#teamBattle').classList.toggle('log-wide',teamView.expanded);e.currentTarget.textContent=teamView.expanded?'絵を大きく':'実況を広く';};
+  $('#editOwnTeam').onclick=()=>{const body=openDialog(`<h2 style="margin:0 0 5px">味方チーム編成</h2><p class="muted small" style="margin:0">同じキャラは入れられません。近接型は前衛、遠距離・飛行型は後衛向きです。</p><div class="team-compose" id="battleTeamCompose"></div><button class="btn primary wide" id="battleTeamDone">決定</button>`);const draw=()=>{$('#battleTeamCompose').innerHTML=teamSelectedHtml();bindTeamComposer($('#battleTeamCompose'),draw);};draw();$('#battleTeamDone').onclick=()=>{closeDialog();renderTeamBattle(quest);};};
+  if(!quest){$('#editEnemyTeam').onclick=openTeamEnemyEditor;$('#editTeamStage').onclick=openTeamStagePicker;$$('[data-battle-mode]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.battleMode);if(n===1){practice.mode=1;renderPracticeBattle();return;}prepareTeam(n,false);teamView.expanded=false;renderTeamBattle(false);});}
+  $('#teamReroll').onclick=()=>$('#editOwnTeam').click();
+  $('#teamSpeed').onclick=e=>{teamView.fast=!teamView.fast;e.currentTarget.innerHTML=`実況：<br>${teamView.fast?'はやい':'ふつう'}`;};$('#teamSkip').onclick=()=>teamView.skip=true;$('#teamGo').onclick=startTeamFight;
+}
+
+async function startTeamFight() {
+  const st=teamView.quest&&TEAM_STAGES.find(x=>x.id===teamView.stageId),token=++teamView.token,feed=$('#teamFeed'),button=$('#teamGo');teamView.skip=false;teamView.running=true;teamView.expanded=true;$('#teamBattle').classList.add('log-wide');$('#teamViewToggle').textContent='絵を大きく';feed.innerHTML='';button.textContent='やり直す';button.classList.add('running');
+  let res;try{res=st?app.server.teamQuestBattle(st.id,teamView.uids,teamView.rows):app.server.teamPracticeBattle(teamView.size,teamView.uids,teamView.rows,teamView.enemies,practiceStage());}catch(e){teamView.running=false;button.classList.remove('running');button.textContent='戦わせる';toast(e.message);return;}
+  renderCoins(true);const names=res.fighters.map(x=>x.name),wait=ms=>new Promise(r=>setTimeout(r,teamView.skip?0:teamView.fast?ms/4:ms));let current=res.fighters.map(x=>({...x,hp:x.maxHp}));renderTeamField(current);
+  for(const event of compressTeamLog(res.log)){if(token!==teamView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hp){current=current.map((f,i)=>({...f,hp:event.hp[i]}));renderTeamField(current);}if(!teamView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}
+  if(token!==teamView.token||!practice.open)return;renderTeamField(res.fighters);const q=res.quest,won=res.winner===0;let extra='';if(q){extra=`<p><b>${q.reward?num(q.reward)+'コイン獲得':'報酬なし'}</b></p><div class="quest-result-goal">挑戦目標：${esc(st.goal.text)}<br><b class="${q.goalDone?'ok':'ng'}">${q.goalDone?'達成！':'未達成'}</b></div>`;}
+  feed.insertAdjacentHTML('beforeend',`<div class="practice-result"><h2>${won?'勝利！':res.winner===1?'敗北…':'引き分け'}</h2><p>${esc(res.reason)}／${res.rounds}ラウンド</p>${extra}</div>`);feed.scrollTop=feed.scrollHeight;teamView.running=false;button.textContent='もう一度';button.classList.remove('running');
 }
 
 function selectedQuestIndividualHtml() {
@@ -1785,17 +1951,19 @@ function renderQuestBattle() {
   if (questView.running) { questView.token++; questView.running=false; }
   practice.open=true; document.body.classList.add('practice-mode');
   questView.enemyId=isFarmStage(st.id)?app.chars.find(c=>st.grades.includes(c.grade)).id:st.boss;
-  $('#main').innerHTML=`<section class="practice-battle"><div class="practice-top"><button class="practice-mini practice-back" id="questListBack">← 一覧</button><h1>${esc(st.name)}</h1></div><div class="practice-versus"><div class="practice-corner" id="questCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="questCorner1"></div></div><div class="practice-stage"><b>${esc(isFarmStage(st.id)?`周回・${st.difficulty}`:`段階${st.level}`)}</b><p class="practice-feature-line">特徴：${st.features.map(esc).join('・')||'なし'}　／　目標：${esc(st.goal?.text||'なし')}</p></div><div class="practice-feed" id="questFeed" aria-live="polite"></div><div class="practice-actions"><button id="questBattleList">一覧へ</button><button id="questSpeed">実況：<br>${questView.fast?'はやい':'ふつう'}</button><button id="questSkip">結果まで<br>飛ばす</button><button class="go" id="questGo">戦わせる</button></div></section>`;
+  $('#main').innerHTML=`<section class="practice-battle ${questView.expanded?'log-wide':''}" id="questBattle"><div class="practice-top"><button class="practice-mini practice-back" id="questListBack">← 一覧</button><h1>${esc(st.name)}</h1><button class="practice-mini battle-view-toggle" id="questViewToggle">${questView.expanded?'絵を大きく':'実況を広く'}</button></div><div class="practice-versus"><div class="practice-corner" id="questCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="questCorner1"></div></div><div class="practice-stage"><b>${esc(isFarmStage(st.id)?`周回・${st.difficulty}`:`段階${st.level}`)}</b><p class="practice-feature-line">特徴：${st.features.map(esc).join('・')||'なし'}　／　目標：${esc(st.goal?.text||'なし')}</p></div><div class="practice-feed" id="questFeed" aria-live="polite"></div><div class="practice-actions"><button id="questBattleList">一覧へ</button><button id="questSpeed">実況：<br>${questView.fast?'はやい':'ふつう'}</button><button id="questSkip">結果まで<br>飛ばす</button><button class="go" id="questGo">戦わせる</button></div></section>`;
   questCorner(0); questCorner(1);
   const back=()=>{ practice.open=false; questView.token++; document.body.classList.remove('practice-mode'); renderAdventure(); };
   $('#questListBack').onclick=back; $('#questBattleList').onclick=back;
   $('#questSpeed').onclick=e=>{questView.fast=!questView.fast;e.currentTarget.innerHTML=`実況：<br>${questView.fast?'はやい':'ふつう'}`;};
+  $('#questViewToggle').onclick=e=>{questView.expanded=!questView.expanded;$('#questBattle').classList.toggle('log-wide',questView.expanded);e.currentTarget.textContent=questView.expanded?'絵を大きく':'実況を広く';};
   $('#questSkip').onclick=()=>{questView.skip=true;}; $('#questGo').onclick=startQuestFight;
 }
 
 async function startQuestFight() {
   const st=questStageById(questView.stageId), token=++questView.token;
   questView.skip=false; questView.running=true;
+  questView.expanded=true; $('#questBattle').classList.add('log-wide'); $('#questViewToggle').textContent='絵を大きく';
   const feed=$('#questFeed'), button=$('#questGo'); feed.innerHTML=''; button.textContent='やり直す'; button.classList.add('running');
   let res;
   try { res=isFarmStage(st.id)?app.server.farmBattle(st.id,questView.ownUid):app.server.questBattle(st.id,questView.ownUid); }
@@ -1876,7 +2044,7 @@ function openPracticePicker(filter = '') {
   });
 }
 
-function openPracticeFeatures() {
+function openPracticeFeatures(onDone = renderPracticeBattle) {
   const descriptions = () => practice.features.length
     ? practice.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>')
     : 'いまは特徴なし';
@@ -1892,7 +2060,7 @@ function openPracticeFeatures() {
     const line = $('.practice-feature-line');
     if (line) line.textContent = `特徴：${practice.features.length ? practice.features.join('・') : 'なし'}`;
   });
-  body.querySelector('#practiceFeatureDone').onclick = () => { closeDialog(); renderPracticeBattle(); };
+  body.querySelector('#practiceFeatureDone').onclick = () => { practice.expanded=false; teamView.expanded=false; closeDialog(); onDone(); };
 }
 
 function practiceEventHtml(e, names) {
@@ -1931,6 +2099,9 @@ async function startPracticeFight() {
   const myToken = ++practice.token;
   practice.skip = false;
   practice.running = true;
+  practice.expanded = true;
+  $('#practiceBattle').classList.add('log-wide');
+  $('#practiceViewToggle').textContent = '絵を大きく';
   const feed = $('#practiceFeed');
   const button = $('#practiceGo');
   feed.innerHTML = '';
@@ -1976,8 +2147,9 @@ function renderPracticeBattle() {
   practice.open = true;
   document.body.classList.add('practice-mode');
   const presetOptions = PRACTICE_STAGES.map((s, i) => `<option value="${i}" ${i === practice.stageIndex ? 'selected' : ''}>${esc(s.name)}</option>`).join('');
-  $('#main').innerHTML = `<section class="practice-battle">
-    <div class="practice-top"><button class="practice-mini practice-back" id="practiceBack">← 冒険</button><h1>対戦（練習試合）</h1></div>
+  $('#main').innerHTML = `<section class="practice-battle ${practice.expanded?'log-wide':''}" id="practiceBattle">
+    <div class="practice-top"><button class="practice-mini practice-back" id="practiceBack">← 冒険</button><h1>対戦（練習試合）</h1><button class="practice-mini battle-view-toggle" id="practiceViewToggle">${practice.expanded?'絵を大きく':'実況を広く'}</button></div>
+    <div class="battle-mode-switch">${[1,2,3].map(n=>`<button data-battle-mode="${n}" class="${n===1?'active':''}">${n}対${n}</button>`).join('')}</div>
     <div class="practice-versus"><div class="practice-corner" id="practiceCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="practiceCorner1"></div></div>
     <div class="practice-stage"><div class="practice-stage-row"><label for="practiceStage">舞台</label><select id="practiceStage">${presetOptions}<option value="custom" ${practice.stageIndex < 0 ? 'selected' : ''}>オリジナルの舞台</option></select><button class="practice-mini" id="practiceFeatures">特徴</button></div><p class="practice-feature-line">特徴：${practice.features.length ? practice.features.map(esc).join('・') : 'なし'}</p></div>
     <div class="practice-feed" id="practiceFeed" aria-live="polite"></div>
@@ -1986,11 +2158,14 @@ function renderPracticeBattle() {
   practiceCorner(0);
   practiceCorner(1);
   $('#practiceBack').onclick = () => show('adventure');
-  $('#practiceFeatures').onclick = openPracticeFeatures;
+  $('#practiceViewToggle').onclick = e => { practice.expanded=!practice.expanded; $('#practiceBattle').classList.toggle('log-wide',practice.expanded); e.currentTarget.textContent=practice.expanded?'絵を大きく':'実況を広く'; };
+  $$('[data-battle-mode]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.battleMode);if(n===1)return;practice.mode=n;prepareTeam(n,false);teamView.expanded=false;renderTeamBattle(false);});
+  $('#practiceFeatures').onclick = () => openPracticeFeatures();
   $('#practiceStage').onchange = e => {
-    if (e.target.value === 'custom') { practice.stageIndex = -1; return; }
+    if (e.target.value === 'custom') { practice.stageIndex = -1; practice.expanded=false; $('#practiceBattle').classList.remove('log-wide'); $('#practiceViewToggle').textContent='実況を広く'; return; }
     practice.stageIndex = Number(e.target.value);
     practice.features = PRACTICE_STAGES[practice.stageIndex].features.slice();
+    practice.expanded = false;
     renderPracticeBattle();
   };
   $('#practiceReroll').onclick = () => { practice.enemyInd = app.server.rollPracticeEnemy(practice.enemyId); practiceCorner(1); };
@@ -2007,6 +2182,8 @@ function openPracticeBattle(enemyCharId = '') {
   practice.enemyInd = app.server.rollPracticeEnemy(practice.enemyId);
   practice.stageIndex = 0;
   practice.features = [];
+  practice.mode = 1;
+  practice.expanded = false;
   app.tab = 'adventure';
   renderPracticeBattle();
   if (!practice.ownUid) toast('先にガチャで個体を仲間にしてください');
