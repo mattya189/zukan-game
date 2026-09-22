@@ -732,6 +732,7 @@ const PRACTICE_STAGES = [
 ];
 const practice = { open:false, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false };
 const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false };
+let adventureView = 'home';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -2091,13 +2092,22 @@ function openPracticeBattle(enemyCharId = '') {
   if (!practice.ownUid) toast('先にガチャで個体を仲間にしてください');
 }
 
-// 冒険には日課・探索と練習試合の入口を表示する。
+// 冒険の中を「日課・探索」と「クエスト」に分ける。
 function renderAdventure() {
   const main = $('#main');
-  main.innerHTML = `<section class="panel practice-entry"><h2>対戦（練習試合）</h2><p class="muted small" style="margin:0 0 8px">保管庫の個体を選び、10体のキャラや好きな舞台と戦えます。報酬はありません。</p><button class="btn primary wide" id="openPractice">練習試合を始める</button></section><section id="questArea">${questSectionsHtml()}</section><div id="dailyArea"></div>`;
-  $('#openPractice').onclick = () => openPracticeBattle();
-  bindQuestSections($('#questArea'));
-  renderDaily($('#dailyArea'));
+  const tabs = `<nav class="adventure-switch" aria-label="冒険メニュー"><button data-adventure-view="home" class="${adventureView==='home'?'active':''}">日課・探索</button><button data-adventure-view="quests" class="${adventureView==='quests'?'active':''}">クエスト</button></nav>`;
+  if (adventureView === 'quests') {
+    main.innerHTML = `${tabs}<section id="questArea">${questSectionsHtml()}</section>`;
+    bindQuestSections($('#questArea'));
+  } else {
+    main.innerHTML = `${tabs}<section class="panel practice-entry"><h2>対戦（練習試合）</h2><p class="muted small" style="margin:0 0 8px">保管庫の個体を選び、10体のキャラや好きな舞台と戦えます。報酬はありません。</p><button class="btn primary wide" id="openPractice">練習試合を始める</button></section><div id="dailyArea"></div>`;
+    $('#openPractice').onclick = () => openPracticeBattle();
+    renderDaily($('#dailyArea'));
+  }
+  $$('[data-adventure-view]').forEach(button => button.onclick = () => {
+    adventureView = button.dataset.adventureView;
+    renderAdventure();
+  });
 }
 
 // ---------------------------------------------------------------------

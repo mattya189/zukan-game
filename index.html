@@ -367,6 +367,9 @@ body.selecting .toast { bottom: calc(150px + env(safe-area-inset-bottom)); }
 .panel { background: var(--paper); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
 .practice-entry { border: 2px solid var(--ink); background: linear-gradient(135deg, #fff, #FFF3C4); }
 .practice-entry h2 { margin: 0 0 4px; }
+.adventure-switch { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:12px; padding:4px; border:2px solid var(--line); border-radius:12px; background:#DDE4EF; }
+.adventure-switch button { min-width:0; padding:8px 4px; border:0; border-radius:8px; background:transparent; color:var(--ink-soft); font-weight:900; }
+.adventure-switch button.active { background:var(--paper); color:var(--ink); box-shadow:0 1px 3px #17213D22; }
 
 /* ---------- 練習試合 ---------- */
 body.practice-mode { overflow: hidden; }
@@ -426,8 +429,10 @@ select.practice-name { border: 1px solid var(--line); }
 .quest-card { position:relative; min-width:0; padding:8px; border:2px solid var(--line); border-radius:12px; background:var(--paper); text-align:left; }
 .quest-card.proof { border-color:var(--gold); box-shadow:inset 0 0 0 2px #FFF0A8; }
 .quest-card-head { display:flex; align-items:center; gap:7px; min-width:0; }
-.quest-card-head strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
-.quest-card-head small { color:var(--ink-soft); font-size:10px; }
+.quest-card-head > .art { flex:0 0 auto; }
+.quest-card-head > span { min-width:0; flex:1; }
+.quest-card-head strong { display:block; overflow-wrap:anywhere; font-size:12px; line-height:1.35; }
+.quest-card-head small { display:block; margin-top:3px; color:var(--ink-soft); font-size:10px; line-height:1.3; }
 .quest-proof { position:absolute; top:5px; right:5px; padding:1px 6px; border-radius:99px; background:var(--gold); color:var(--ink); font-size:9px; font-weight:900; }
 .quest-levels { display:grid; grid-template-columns:repeat(3,1fr); gap:3px; margin-top:6px; }
 .quest-level { border:1px solid var(--line); border-radius:6px; padding:3px 1px; background:#fff; font-size:9px; font-weight:900; text-align:center; }
