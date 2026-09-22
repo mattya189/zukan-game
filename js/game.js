@@ -1064,8 +1064,9 @@ function renderZukan() {
 function zukanStoryTextHtml(text) {
   return String(text).split('\n').map(line => line.trim()).filter(Boolean).map(line => {
     const quote = /^「[^」]*」[。、]?$/.test(line);
-    const beat = line.length <= 12 && !quote;
-    return `<p class="${quote ? 'q' : beat ? 'beat' : ''}">${esc(line)}</p>`;
+    const flow = line === '↓';
+    const beat = line.length <= 12 && !quote && !flow;
+    return `<p class="${quote ? 'q' : flow ? 'flow' : beat ? 'beat' : ''}">${esc(line)}</p>`;
   }).join('');
 }
 
@@ -1152,15 +1153,22 @@ function openZukanPage(charId) {
   const hallMap = Object.fromEntries(app.server.hall(charId).map(r => [`${r.stat}:${r.dir}`,r]));
   const records = RECORD_SPECS.map(([stat,dir]) => { const r=hallMap[`${stat}:${dir}`]; return `<div class="zukan-fact"><dt>${STAT_LABEL[stat]}（${dirLabel(stat,dir)}）</dt><dd>${r ? `<b>${fmtValue(stat,r.value)}</b><small>${esc(r.owner_name)}</small>` : '—'}</dd></div>`; }).join('');
   const grade = GRADE_INFO[c.grade];
-  const body = openDialog(`<div class="zukan-page">
-    <div class="zukan-art-stage"><span class="zukan-no">No.${String(idx).padStart(3,'0')}</span><div class="zukan-hero-media">${zukanHeroMediaHtml(c,'base','通常')}</div></div>
-    <div class="zukan-identity"><h2>${esc(c.name)}</h2><p>${esc(c.title)}</p><div><strong class="grade" style="--grade:${grade[1]}">${c.grade}級・${grade[0]}${c.category === 'マッチ守護者' ? '（守護者）' : ''}</strong><em>${esc(c.category)}</em>${c.kind ? `<em>${esc(c.kind)}</em>` : ''}</div></div>
+  const body = openDialog(`<div class="zukan-page" style="--zukan-el:${grade[1]}">
+    <header class="zukan-hero"><div class="zukan-art-stage"><span class="zukan-no">No.${String(idx).padStart(3,'0')}</span><div class="zukan-hero-media">${zukanHeroMediaHtml(c,'base','通常')}</div></div>
+    <div class="zukan-identity"><h2>${esc(c.name)}</h2><p>${esc(c.title)}</p><div><strong class="grade" style="--grade:${grade[1]}">${c.grade}級・${grade[0]}${c.category === 'マッチ守護者' ? '（守護者）' : ''}</strong><em>${esc(c.category)}</em>${c.kind ? `<em>${esc(c.kind)}</em>` : ''}</div></div></header>
     <div class="zukan-page-tabs" role="tablist">${[['basic','基本'],['story','物語'],['combat','戦闘能力'],['records','記録']].map(([k,l],i)=>`<button data-zukan-tab="${k}" aria-selected="${i===0}">${l}</button>`).join('')}</div>
     <div class="zukan-panels"><section class="zukan-panel" data-zukan-panel="basic"><dl class="zukan-facts">${basicFacts.map(([l,v])=>`<div class="zukan-fact"><dt>${l}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>${ability ? `<h3 class="zukan-panel-title">マッチアビリティ</h3>${zukanStoryPairsHtml([ability])}` : ''}</section>
-    <section class="zukan-panel" data-zukan-panel="story" hidden>${[1,2,3,4,5].map(r=>zukanStorySectionHtml(c,g,r)).join('')}</section>
+    <section class="zukan-panel" data-zukan-panel="story" hidden><div class="story-tools"><button class="btn" id="openAllStories">すべて開く</button><button class="btn" id="closeAllStories">すべてたたむ</button></div>${[1,2,3,4,5].map(r=>zukanStorySectionHtml(c,g,r)).join('')}</section>
     <section class="zukan-panel" data-zukan-panel="combat" hidden>${combatPanelHtml(c)}</section>
     <section class="zukan-panel" data-zukan-panel="records" hidden><h3 class="zukan-panel-title">見つけた称号 ${found.length} / ${TITLES.length}</h3><div class="title-list">${titleTags}</div><h3 class="zukan-panel-title">世界記録</h3><dl class="zukan-facts zukan-records">${records}</dl><button class="btn primary wide" id="seeMine" ${mineCount?'':'disabled'}>保管庫のこのキャラを見る（${mineCount}体）</button></section></div></div>`, 'zukan');
-  body.querySelectorAll('[data-zukan-tab]').forEach(b => b.onclick=()=>{ body.querySelectorAll('[data-zukan-tab]').forEach(x=>x.setAttribute('aria-selected',String(x===b))); body.querySelectorAll('[data-zukan-panel]').forEach(x=>x.hidden=x.dataset.zukanPanel!==b.dataset.zukanTab); });
+  const page = body.querySelector('.zukan-page');
+  const panels = [...body.querySelectorAll('[data-zukan-panel]')];
+  const updateCompact = panel => page.classList.toggle('is-compact', panel.scrollTop > 12);
+  panels.forEach(panel => panel.addEventListener('scroll', () => updateCompact(panel), { passive:true }));
+  body.querySelectorAll('[data-zukan-tab]').forEach(b => b.onclick=()=>{ body.querySelectorAll('[data-zukan-tab]').forEach(x=>x.setAttribute('aria-selected',String(x===b))); panels.forEach(x=>x.hidden=x.dataset.zukanPanel!==b.dataset.zukanTab); updateCompact(panels.find(x=>!x.hidden)); });
+  const storyPanel=body.querySelector('[data-zukan-panel="story"]');
+  body.querySelector('#openAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=true;});
+  body.querySelector('#closeAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=false;});
   const mine=body.querySelector('#seeMine'); if(mine) mine.onclick=()=>{ app.vf={...app.vf,charId,rarity:'',titled:false}; closeDialog(); show('vault'); };
 }
 
