@@ -126,6 +126,78 @@ const TEAM_KITS = {
   chr_009: {
     onRound(ctx, f) { if (ctx.round >= 4) ctx.enemies(f).forEach(t => addMod(t, { key: 'wireAll', stat: 'spd', mul: 1 - Math.min(0.2, ctx.round * 0.02), turns: 99 })); }
   },
+
+  // カンカラッチ：警界で敵全体を惑わせる
+  chr_011: {
+    onRound(ctx, f) {
+      if (ctx.round % 6 === 2) {
+        const en = ctx.enemies(f);
+        if (en.length >= 2) {
+          en.forEach(t => addMod(t, { key: 'kankaiAll', stat: 'wis', mul: 1 - 0.12 * FIGHTER_KITS.chr_011.noiseRate(f, t), turns: 3 }));
+          ctx.say('skill', `${f.name}の「警界」！ 四方から警報音が反響し、敵全体が${f.name}の位置を見失った`, { side: f.side, skill: '警界' });
+        }
+      }
+    },
+    action(ctx, f) {
+      if (ctx.round % 9 === 5 && ctx.enemies(f).length >= 2) return { area: true, name: 'カンカン連打（乱打）', mult: 1.0, label: '「カン、カン、カン、カン、カン！」――踏切のリズムで敵全体を殴り回る' };
+    }
+  },
+
+  // ネガヴォイド：疑心連鎖と万心解析。後衛も狙える
+  chr_012: {
+    targetBack: 0.7,
+    onRound(ctx, f) {
+      const en = ctx.enemies(f);
+      if (en.length >= 2 && ctx.round % 6 === 4) {
+        en.forEach(t => { const p = ctx.mental(f, t, 1); addMod(t, { key: 'doubt', stat: 'atk', mul: 1 - 0.12 * p, turns: 3 }); });
+        ctx.say('skill', `${f.name}の「疑心連鎖」！ 「本当に味方なのか？」――敵チームの連携が崩れていく`, { side: f.side, skill: '疑心連鎖' });
+      }
+      if (!f.flags.tAll && f.meters.read >= 60 && en.length >= 2) {
+        f.flags.tAll = true;
+        en.forEach(t => { const p = ctx.mental(f, t, 1); addMod(t, { key: 'allRead', stat: 'wis', mul: 1 - 0.15 * p, turns: 99 }); });
+        ctx.say('skill', `${f.name}の「万心解析」！ 戦場が、無数の感情が繋がった巨大な地図として見えている`, { side: f.side, skill: '万心解析' });
+      }
+    }
+  },
+
+  // タメリス：味方を立て直す支援役
+  chr_013: {
+    onStart(ctx, f) {
+      ctx.allies(f).forEach(a => { a.shield = Math.max(a.shield, a.maxHp * 0.07); });
+      f.meters.stock -= 10;
+      ctx.say('skill', `${f.name}の「先払い治療」！ 戦う前に、味方全員へ生命力を預けておいた`, { side: f.side, skill: '先払い治療' });
+    },
+    onRound(ctx, f) {
+      const K = FIGHTER_KITS.chr_013;
+      if (f.meters.stock <= 0) return;
+      const allies = ctx.allies(f);
+      // 備蓄共有圏：味方が少しずつ回復する
+      if (ctx.round % 3 === 0 && allies.length) {
+        const rate = Math.max(0.3, f.meters.stock / 100);
+        allies.forEach(a => { a.hp = Math.min(a.maxHp, a.hp + a.maxHp * 0.022 * rate); });
+        f.meters.stock -= 6;
+        if (ctx.round % 9 === 0) ctx.say('skill', `${f.name}の「備蓄共有圏」！ 足りないものが、備蓄から自動で味方へ供給されていく`, { side: f.side, skill: '備蓄共有圏' });
+      }
+      // 緊急備蓄解放：瀕死の味方を戻す
+      const dying = allies.filter(a => a.hp < a.maxHp * 0.3);
+      if (dying.length && !f.flags.tEmergency && f.meters.stock >= 25) {
+        f.flags.tEmergency = true;
+        const rate = Math.max(0.3, f.meters.stock / 100);
+        dying.forEach(a => { const amount = Math.round(a.maxHp * 0.22 * rate); a.hp = Math.min(a.maxHp, a.hp + amount); });
+        f.meters.stock -= 30;
+        ctx.say('skill', `${f.name}の「緊急備蓄解放」！ ${dying.map(a => a.name).join('と')}へ生命力を一気に流し込んだ`, { side: f.side, skill: '緊急備蓄解放' });
+      }
+      // 百年備蓄・大放出：全員まとめて立て直す
+      if (!f.flags.tCentury && f.meters.stock >= 45 && allies.concat([f]).filter(a => a.hp < a.maxHp * 0.45).length >= 2) {
+        f.flags.tCentury = true;
+        const rate = Math.max(0.3, f.meters.stock / 100);
+        allies.concat([f]).forEach(a => { a.hp = Math.min(a.maxHp, a.hp + a.maxHp * 0.16 * rate); });
+        f.meters.stock -= 45;
+        ctx.say('skill', `${f.name}の「百年備蓄・大放出」！ 何十年ぶんもの備蓄が解放され、チーム全体が息を吹き返した`, { side: f.side, skill: '百年備蓄・大放出' });
+      }
+    }
+  },
+
   // デウマグナ：偽神魔界は狭く、自分だけが強くなる（集団戦用の技はない）
   chr_010: {}
 };
@@ -305,4 +377,4 @@ function teamAct(ctx, f) {
 }
 
 // 集団戦用の強さの補正値（1対1の KIT_TUNE に重ねて掛かる）。tools/team-sim.js --calibrate で合わせる
-const TEAM_TUNE = { chr_001: 0.896, chr_002: 0.868, chr_003: 1.043, chr_004: 1.292, chr_005: 0.772, chr_006: 0.7, chr_007: 1.13, chr_008: 1.417, chr_009: 0.763, chr_010: 0.924 };
+const TEAM_TUNE = { chr_001: 0.885, chr_002: 0.898, chr_003: 1.034, chr_004: 1.27, chr_005: 0.759, chr_006: 0.739, chr_007: 1.15, chr_008: 1.353, chr_009: 0.747, chr_010: 0.972, chr_011: 1.063, chr_012: 1.158, chr_013: 1.016 };

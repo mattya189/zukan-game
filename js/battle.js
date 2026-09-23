@@ -20,7 +20,7 @@ const BATTLE_RULES = {
   MAX_ROUNDS: 60,
   BASE_HP: 560,          // 体力 ＝ (BASE_HP + 持久力 × HP_PER_STA) × 等級の倍率
   HP_PER_STA: 6,
-  BASE_DMG: 17,          // 1回の攻撃の基本ダメージ
+  BASE_DMG: 18.6,          // 1回の攻撃の基本ダメージ
   STAT_FLOOR: 35,        // 能力値の差を縮めるための下駄（実効値 ＝ 35 ＋ 0.65 × 能力値）
   STAT_SLOPE: 0.65
 };
@@ -985,7 +985,179 @@ const FIGHTER_KITS = {
       if (ctx.round % 9 === 0) return { name: '神罰雷', mult: 1.4, sure: true, label: '「神罰である！」――' };
       return { name: ctx.line(f, 'attack') };
     }
+  },
+
+  // ------------------------------------------------------------------ 011
+  chr_011: {
+    short: 'カンカラッチ',
+    uses: ['sound'],
+    lines: {
+      intro: ['カン。', '渡るの？　渡らないの？'],
+      attack: ['警音拳を叩き込んだ', '長い腕で殴りつけた', '踏響掌を押し当てた'],
+      low: ['カンカンカンカン！'],
+      win: ['もう渡っていいって！'],
+      lose: ['……カン。']
+    },
+    init(f) { f.meters.dizzy = 0; f.meters.echo = 100; },
+    // 警音反響：音を無視して突っ込んでくる相手（大型・高揚）には効きが半分
+    noiseRate(f, foe) {
+      let r = f.meters.echo / 100;
+      if (foe.tags.has('大型') || foe.tags.has('高揚')) r *= 0.5;
+      if (foe.tags.has('分析')) r *= 0.75;
+      return r;
+    },
+    onRound(ctx, f, foe) {
+      if (!f.flags.barrier && ctx.round >= 6 && ctx.r.chance(0.3)) {
+        f.flags.barrier = true;
+        addMod(foe, { key: 'kankai', stat: 'wis', mul: 1 - 0.2 * this.noiseRate(f, foe), turns: 4 });
+        skill(ctx, f, '警界', `「カン、カン、カン、カン」――四方から警報音が反響し、${foe.name}は${f.name}の位置を音で判断できなくなった`);
+      }
+      // 遮断打：離れようとする相手を止める
+      if (foe.tags.has('遠距離') && ctx.round % 6 === 3) {
+        addMod(foe, { key: 'shadan', stat: 'spd', mul: 0.88, turns: 2 });
+        skill(ctx, f, '遮断打', `長い腕を遮断機のように振り抜き、${foe.name}の進路を塞いだ`);
+      }
+    },
+    accuracy(ctx, f, foe) { return f.flags.fake ? 0.2 : 0; },
+    evasion(ctx, f, attacker) { return 0.06 * FIGHTER_KITS.chr_011.noiseRate(f, attacker); },
+    damageOut(ctx, f, foe, dmg) { return foe.tags.has('遠距離') && !foe.bind ? dmg * 0.92 : dmg; },
+    onHit(ctx, f, foe) {
+      // 警音拳：当てるほど相手の平衡感覚が乱れる
+      if (f.meters.dizzy < 5) {
+        f.meters.dizzy++;
+        addMod(foe, { key: 'dizzy', stat: 'spd', mul: 1 - 0.03 * f.meters.dizzy * FIGHTER_KITS.chr_011.noiseRate(f, foe), turns: 99 });
+      }
+    },
+    chooseAction(ctx, f, foe) {
+      const { r } = ctx;
+      f.flags.fake = false;
+      if (!f.flags.last && (foe.hp < foe.maxHp * 0.5 || ctx.round >= 20)) {
+        f.flags.last = true;
+        return { name: '終電警鐘', mult: 2.6, big: true, label: '警報音がぴたりと止み、あたりが無音になった――',
+          after(ctx, f, foe) {
+            if (r.chance(0.6 * FIGHTER_KITS.chr_011.noiseRate(f, foe))) { foe.stun = 1; ctx.say('info', `至近距離の「カァァァン！！」で、${foe.name}は大きく怯んだ`, { side: foe.side }); }
+            f.meters.echo = 25;
+            ctx.say('info', `${f.name}は蓄えていた警報音を使い切った`, { side: f.side });
+          } };
+      }
+      if (ctx.round % 5 === 2) {
+        return { name: '踏響掌', mult: 0.9, sure: true, label: '掌を押し当て、身体に直接振動を送り込む――',
+          after(ctx, f, foe) { if (r.chance(0.5 * FIGHTER_KITS.chr_011.noiseRate(f, foe))) foe.stun = 1; } };
+      }
+      if (ctx.round % 4 === 1) { f.flags.fake = true; return { name: '偽踏音からの一撃', mult: 1.3, label: `${foe.name}の背後から「カン」――振り向いた正面から、` }; }
+      if (r.chance(0.25)) return { name: 'カンカン連打', hits: 3 + Math.floor(r() * 3), mult: 1.15 };
+      return { name: ctx.line(f, 'attack') };
+    }
+  },
+
+  // ------------------------------------------------------------------ 012
+  chr_012: {
+    short: 'ネガヴォイド',
+    uses: [],
+    mentalRes: 0.5,   // 自分の感情を理解している
+    lines: {
+      intro: ['そこ、まだ部屋があるよ', '心が暗くなることは、そんなに珍しいことじゃない'],
+      attack: ['蜘蛛脚で刺突した', '紫の次元糸を放った', '心淵界から黒い手を伸ばした'],
+      low: ['……まだ、見ていない部屋がある'],
+      win: ['でも、それをどうするかは君が決めることだ'],
+      lose: ['……預かっておくよ']
+    },
+    init(f) { f.meters.read = 0; },
+    onRound(ctx, f, foe) {
+      // 深層解析：戦うほど相手専用の攻略法ができていく
+      let gain = 3.4 + statOf(f, 'wis') / 90;
+      if (foe.uses.has('irregular')) gain *= 0.55;                 // 思考が読めない相手
+      if (foe.tags.has('短期決戦') && ctx.round <= 10) gain *= 0.5;  // 仕上がる前に決められる
+      if (foe.resolve === 'high') gain *= 0.8;                      // 自分の感情を理解している相手
+      f.meters.read = Math.min(100, f.meters.read + gain);
+      if (f.meters.read >= 50 && !f.flags.coord) { f.flags.coord = true; skill(ctx, f, '精神座標', `${foe.name}の恐怖・後悔・執着が座標として記録された。ここからが本番だ`); }
+      // 心淵共鳴
+      if (ctx.round % 5 === 3 && f.flags.coord) {
+        const p = ctx.mental(f, foe, 1);
+        addMod(foe, { key: 'resonance', stat: 'atk', mul: 1 - clamp(0.25 * p, 0.03, 0.28), turns: 3 });
+        skill(ctx, f, '心淵共鳴', `${foe.name}の中にあった感情が、心淵界の同じ感情と響き合い、異常に鮮明になった`);
+      }
+      // 黒心反射
+      if (ctx.round % 7 === 5) {
+        const p = ctx.mental(f, foe, 1);
+        addMod(foe, { key: 'mirror', stat: 'wis', mul: 1 - clamp(0.2 * p, 0.03, 0.22), turns: 3 });
+        skill(ctx, f, '黒心反射', `${foe.name}が認めたくなかったものが、幻影として目の前に現れた`);
+      }
+    },
+    accuracy(ctx, f) { return f.meters.read * 0.0018; },
+    evasion(ctx, f, attacker, opt) { return opt && opt.big ? 0.35 : 0.05; },   // 心淵潜航
+    statMul(f, stat) { if (stat === 'atk') return 0.75 + f.meters.read * 0.004; return 1; },
+    chooseAction(ctx, f, foe) {
+      const { r } = ctx;
+      if (!f.flags.prison && f.meters.read >= 85) {
+        f.flags.prison = true;
+        const p = ctx.mental(f, foe, 1);
+        return { name: '深層心界・無明牢', mult: 2.2, big: true, sure: true, label: '精神だけが、心淵界の深層へ引きずり込まれた――',
+          after(ctx, f, foe) {
+            const turns = p >= 0.9 ? 3 : p >= 0.55 ? 2 : 1;
+            foe.stun = turns;
+            ctx.say('info', `${foe.name}は、自分自身が作った世界に閉じ込められた（${turns}ラウンド行動不能）`, { side: foe.side });
+          } };
+      }
+      if (ctx.round % 9 === 6) {
+        return { special(ctx, f, foe) {
+          const p = ctx.mental(f, foe, 1);
+          skill(ctx, f, '心界糸', `紫の次元糸が${foe.name}の精神と心淵界を繋いだ。距離も時間も、あいまいになっていく`);
+          if (r.chance(0.5 * p)) { foe.stun = 1; ctx.say('info', `${foe.name}は、数秒のつもりで数分を失った`, { side: foe.side }); }
+          else addMod(foe, { key: 'thread', stat: 'spd', mul: 0.85, turns: 3 });
+        } };
+      }
+      return { name: ctx.line(f, 'attack') };
+    }
+  },
+
+  // ------------------------------------------------------------------ 013
+  chr_013: {
+    short: 'タメリス',
+    uses: [],
+    lines: {
+      intro: ['使うべき時に使わない貯蓄は、ただの荷物', 'ちゃんと備えてある'],
+      attack: ['爪で薙ぎ払った', '尾で打ち払った', '翼で殴りつけた'],
+      low: ['……ここで使わないと、もっと大きなものを失う'],
+      win: ['備えておいてよかった'],
+      lose: ['……まだ使う時じゃなかったか']
+    },
+    init(f) { f.meters.stock = 100; },
+    heal(ctx, f, pct, cost, name, text) {
+      if (f.meters.stock <= 0) return false;
+      const rate = Math.max(0.3, f.meters.stock / 100);
+      const amount = Math.round(f.maxHp * pct * rate);
+      f.hp = Math.min(f.maxHp, f.hp + amount);
+      f.meters.stock = Math.max(0, f.meters.stock - cost);
+      skill(ctx, f, name, `${text}（体力+${amount}／備蓄 残り${Math.round(f.meters.stock)}）`);
+      return true;
+    },
+    onStart(ctx, f) {
+      f.shield = f.maxHp * 0.08;
+      f.meters.stock -= 8;
+      skill(ctx, f, '先払い治療', '戦う前に、自分へ生命力を預けておいた。傷つけば自動で癒える');
+    },
+    onRound(ctx, f, foe) {
+      const K = FIGHTER_KITS.chr_013;
+      f.meters.stock -= 1.6;   // 備蓄は、維持しているだけでも少しずつ目減りする
+      if (f.meters.stock <= 0) { if (!f.flags.empty) { f.flags.empty = true; ctx.say('info', `${f.name}の備蓄が尽きた`, { side: f.side }); } return; }
+      if (f.hp < f.maxHp * 0.25 && !f.flags.emergency) { f.flags.emergency = true; K.heal(ctx, f, 0.22, 40, '緊急備蓄解放', '溜め込んでいた生命力を一気に流し込んだ'); return; }
+      if (f.hp < f.maxHp * 0.4 && !f.flags.century && f.meters.stock >= 45) { f.flags.century = true; K.heal(ctx, f, 0.18, 50, '百年備蓄・大放出', '「今ここで使わなければ、もっと大きなものを失う」――何十年ぶんもの備蓄が解放された'); return; }
+      if (f.hp < f.maxHp * 0.6 && !f.flags.ration) { f.flags.ration = true; K.heal(ctx, f, 0.13, 18, '非常食', '巨大などんぐりのような実を噛み砕いた'); return; }
+      if (ctx.round % 5 === 0 && f.hp < f.maxHp * 0.85) K.heal(ctx, f, 0.04, 13, 'リザーブ・ヒール', '蓄えていた生命力を引き出した');
+    },
+    // 幸運の備蓄：一度だけ、致命的な一撃を耐える
+    damageIn(ctx, f, src, dmg) {
+      if (!f.flags.luck && dmg >= f.hp && f.hp > 1) {
+        f.flags.luck = true;
+        ctx.say('big', `${f.name}の「幸運の備蓄」！ 何年もかけて貯めた運が、あり得ない偶然を連れてきた（体力1で踏みとどまる）`, { side: f.side, skill: '幸運の備蓄' });
+        return f.hp - 1;
+      }
+      return dmg;
+    },
+    chooseAction(ctx, f, foe) { return { name: ctx.line(f, 'attack'), mult: 0.9 }; }
   }
+
 };
 
 // バサラの飛行（強風で速くなる）
@@ -993,14 +1165,17 @@ function ctx_wind(f) { return f.flags.strongWind; }
 
 // キャラごとの強さの補正値（与えるダメージに掛ける）。等級ごとの目標勝率に合わせて自動調整したもの
 const KIT_TUNE = {
- 'chr_001': 0.786,
- 'chr_002': 0.982,
- 'chr_003': 0.658,
- 'chr_004': 2.161,
- 'chr_005': 1.055,
- 'chr_006': 0.612,
+ 'chr_001': 0.805,
+ 'chr_002': 1.027,
+ 'chr_003': 0.672,
+ 'chr_004': 2.255,
+ 'chr_005': 1.096,
+ 'chr_006': 0.647,
  'chr_007': 0.767,
- 'chr_008': 0.78,
- 'chr_009': 1.062,
- 'chr_010': 1.851
+ 'chr_008': 0.818,
+ 'chr_009': 1.053,
+ 'chr_010': 1.881,
+ 'chr_011': 1.285,
+ 'chr_012': 0.996,
+ 'chr_013': 0.917
 };
