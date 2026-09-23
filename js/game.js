@@ -241,6 +241,7 @@ class GameServer {
     s.login = s.login || { last: '', streak: 0 };
     s.missions = s.missions || { date: '', progress: {}, claimed: {} };
     s.expeditions = s.expeditions || [];
+    s.onlineStampRewards = Array.isArray(s.onlineStampRewards) ? s.onlineStampRewards : null;
     s.settings = Object.assign({ sound: true, effects: 'full' }, s.settings || {});
     const qp = s.questProgress || {};
     s.questProgress = {
@@ -281,6 +282,35 @@ class GameServer {
     if (wallet.login_last !== undefined) {
       this.s.login.last = wallet.login_last || '';
       this.s.login.streak = Number(wallet.login_streak || wallet.day || 0);
+    }
+    if (wallet.missions) {
+      const claimed = {};
+      for (const id of wallet.missions.claimed || []) claimed[id] = true;
+      this.s.missions = { date:String(wallet.missions.date || this.today()), progress:{ ...(wallet.missions.progress || {}) }, claimed };
+    }
+    if (Array.isArray(wallet.stamp_rewards)) {
+      this.s.onlineStampRewards = wallet.stamp_rewards.map(x => ({
+        key:String(x.key), char_id:String(x.char_id), rarity:x.rarity == null ? null : Number(x.rarity),
+        amount:Number(x.amount), kind:String(x.kind || 'stamp')
+      }));
+    }
+    if (Array.isArray(wallet.quest_progress)) {
+      const q = this.s.questProgress;
+      q.cleared = {}; q.goals = {}; q.teamCleared = {}; q.teamGoals = {}; q.farmReadyAt = {}; q.arenaStreak = 0;
+      for (const row of wallet.quest_progress) {
+        const id = String(row.stage_id || '');
+        if (id.startsWith('q')) { if (row.cleared) q.cleared[id] = true; if (row.goal) q.goals[id] = true; }
+        else if (id.startsWith('t')) { if (row.cleared) q.teamCleared[id] = true; if (row.goal) q.teamGoals[id] = true; }
+        else if (id.startsWith('farm_')) { q.farmReadyAt[id] = Number(row.farm_ready_at || 0); if (id === 'farm_2') q.arenaStreak = Number(row.arena_streak || 0); }
+      }
+      q.proofs = {};
+      STAGES.filter(st => st.level === 3 && q.cleared[st.id]).forEach(st => { q.proofs[st.boss] = true; });
+    }
+    if (Array.isArray(wallet.expeditions)) {
+      this.s.expeditions = wallet.expeditions.map(e => ({
+        id:Number(e.id), dest:String(e.dest), uids:(e.uids || []).map(Number),
+        start:Number(e.start), end:Number(e.end), reward:Number(e.reward), great:!!e.great
+      }));
     }
     this._save();
     return this.player();
@@ -369,6 +399,12 @@ class GameServer {
 
   // ---------- 図鑑報酬 ----------
   stampRewards() {
+    if (this.s.onlineWallet && Array.isArray(this.s.onlineStampRewards)) {
+      return this.s.onlineStampRewards.map(x => ({
+        ...x,
+        label:x.kind === 'complete' ? `${this.charMap[x.char_id].name} コンプリート` : `${this.charMap[x.char_id].name} ★${x.rarity}`
+      }));
+    }
     const list = [];
     const byChar = {};
     for (const z of Object.values(this.s.zukan)) {
@@ -1118,6 +1154,7 @@ async function doPull(n) {
       const localUids = app.server.nextPullUids(n, true);
       const pulled = await OnlineRanking.pull(n, app.server.player().display_name, localUids);
       data = app.server.acceptOnlinePull(n, pulled.results, pulled.coins);
+      app.server.applyOnlineWallet(await OnlineRanking.wallet());
     } else {
       data = app.server.pull(n);
     }
@@ -1292,7 +1329,15 @@ function renderZukan() {
     }).join('')}</div>`;
 
   const claim = $('#claimStamps');
-  if (claim) claim.onclick = () => { const r = app.server.claimStampRewards(); gained(r.gained, '図鑑報酬'); renderZukan(); };
+  if (claim) claim.onclick = async () => {
+    claim.disabled = true;
+    try {
+      const r = onlineWalletEnabled() ? await OnlineRanking.claimStamps() : app.server.claimStampRewards();
+      if (onlineWalletEnabled()) app.server.applyOnlineWallet(r);
+      gained(Number(r.gained || 0), '図鑑報酬');
+      renderZukan();
+    } catch (e) { claim.disabled = false; toast(e.message); }
+  };
   main.querySelectorAll('.zcell').forEach(el => { el.onclick = () => openZukanPage(el.dataset.id); });
 }
 
@@ -1532,7 +1577,9 @@ async function releaseOnlineIndividuals(individuals) {
     if (!uids.length) return null;
     throw new Error('オンライン個体を送り出すには通信が必要です');
   }
-  return uids.length ? OnlineRanking.release(uids) : OnlineRanking.wallet();
+  const released = uids.length ? await OnlineRanking.release(uids) : { gained:0, released:[] };
+  const status = await OnlineRanking.wallet();
+  return { ...status, gained:Number(released.gained || 0), released:released.released || [] };
 }
 
 function renderReleaseBar(all) {
@@ -1550,6 +1597,7 @@ function renderReleaseBar(all) {
     try {
       const onlineResult = await releaseOnlineIndividuals(picked);
       const r = app.server.release(uids, onlineResult);
+      if (onlineResult) app.server.applyOnlineWallet(onlineResult);
       app.selectMode = false; app.selected.clear();
       gained(r.gained, `${r.count}体を送り出しました`);
       renderVault();
@@ -1607,16 +1655,25 @@ function renderDaily(main) {
     </section>`;
 
   $$('[data-mission]').forEach(b => {
-    b.onclick = () => { try { const r = app.server.claimMission(b.dataset.mission); gained(r.gained, 'ミッション'); renderAdventure(); } catch (e) { toast(e.message); } };
+    b.onclick = async () => {
+      b.disabled = true;
+      try {
+        const r = onlineWalletEnabled() ? await OnlineRanking.claimMission(b.dataset.mission) : app.server.claimMission(b.dataset.mission);
+        if (onlineWalletEnabled()) app.server.applyOnlineWallet(r);
+        gained(Number(r.gained || 0), 'ミッション'); renderAdventure();
+      } catch (e) { b.disabled = false; toast(e.message); }
+    };
   });
   $$('[data-claim]').forEach(b => {
-    b.onclick = () => {
+    b.onclick = async () => {
+      b.disabled = true;
       try {
-        const r = app.server.claimExpedition(Number(b.dataset.claim));
+        const r = onlineWalletEnabled() ? await OnlineRanking.claimExpedition(Number(b.dataset.claim)) : app.server.claimExpedition(Number(b.dataset.claim));
+        if (onlineWalletEnabled()) app.server.applyOnlineWallet(r);
         gained(r.gained, r.great ? '大成功！' : '探索');
         if (r.great) vibrate(60);
         renderAdventure();
-      } catch (e) { toast(e.message); }
+      } catch (e) { b.disabled = false; toast(e.message); }
     };
   });
   $$('[data-plan]').forEach(b => { b.onclick = () => openExpeditionPlanner(); });
@@ -1659,13 +1716,15 @@ function openExpeditionPlanner(state = { dest: 'field', picked: [] }) {
       openExpeditionPlanner({ ...state, picked });
     };
   });
-  body.querySelector('#goExp').onclick = () => {
+  body.querySelector('#goExp').onclick = async () => {
+    const go = body.querySelector('#goExp'); go.disabled = true;
     try {
-      app.server.startExpedition(state.dest, state.picked);
+      if (onlineWalletEnabled()) app.server.applyOnlineWallet(await OnlineRanking.startExpedition(state.dest, state.picked));
+      else app.server.startExpedition(state.dest, state.picked);
       closeDialog();
       toast('探索に出発しました');
       if (app.tab === 'adventure') renderAdventure();
-    } catch (e) { toast(e.message); }
+    } catch (e) { go.disabled = false; toast(e.message); }
   };
 }
 
@@ -1784,6 +1843,9 @@ async function renderRanking() {
 function openDetail(uid) {
   let ind;
   try { ind = app.server.individual(uid, true); } catch (e) { toast(e.message); return; }
+  if (onlineWalletEnabled() && ind.owner_id === 'me' && ind.online_verified) {
+    OnlineRanking.recordDetail().then(status => { app.server.applyOnlineWallet(status); updateBadges(); }).catch(() => {});
+  }
   const ranks = app.server.ranks(uid);
   const c = app.charMap[ind.char_id];
   const mine = ind.owner_id === app.server.userId;
@@ -1853,6 +1915,7 @@ function openDetail(uid) {
       try {
         const onlineResult = await releaseOnlineIndividuals([ind]);
         const r = app.server.release([uid], onlineResult);
+        if (onlineResult) app.server.applyOnlineWallet(onlineResult);
         closeDialog();
         app.lastResults = app.lastResults.filter(x => x.uid !== uid);
         gained(r.gained, '送り出しました');
@@ -2048,7 +2111,19 @@ function renderTeamBattle(quest=teamView.quest) {
 
 async function startTeamFight() {
   const st=teamView.quest&&TEAM_STAGES.find(x=>x.id===teamView.stageId),token=++teamView.token,feed=$('#teamFeed'),button=$('#teamGo');teamView.skip=false;teamView.running=true;teamView.expanded=true;$('#teamBattle').classList.add('log-wide');$('#teamViewToggle').textContent='絵を大きく';feed.innerHTML='';button.textContent='やり直す';button.classList.add('running');
-  let res;try{res=st?app.server.teamQuestBattle(st.id,teamView.uids,teamView.rows):app.server.teamPracticeBattle(teamView.size,teamView.uids,teamView.rows,teamView.enemies,practiceStage());}catch(e){teamView.running=false;button.classList.remove('running');button.textContent='戦わせる';toast(e.message);return;}
+  let res,ticket=null;
+  try{
+    if(st&&onlineWalletEnabled())ticket=await OnlineRanking.beginBattle(st.id,teamView.uids);
+    res=st?app.server.teamQuestBattle(st.id,teamView.uids,teamView.rows):app.server.teamPracticeBattle(teamView.size,teamView.uids,teamView.rows,teamView.enemies,practiceStage());
+    if(ticket){
+      const settled=await OnlineRanking.finishBattle(ticket,res.quest.cleared,res.quest.goalDone);
+      app.server.applyOnlineWallet(settled);
+      res.quest={...res.quest,reward:Number(settled.reward||0),first:!!settled.first,goalFirst:!!settled.goal_first};
+    }
+  }catch(e){
+    if(st&&onlineWalletEnabled()){try{app.server.applyOnlineWallet(await OnlineRanking.wallet());}catch(ignore){}}
+    teamView.running=false;button.classList.remove('running');button.textContent='戦わせる';toast(e.message);return;
+  }
   renderCoins(true);const names=res.fighters.map(x=>x.name),wait=ms=>new Promise(r=>setTimeout(r,teamView.skip?0:teamView.fast?ms/4:ms));let current=res.fighters.map(x=>({...x,hp:x.maxHp}));renderTeamField(current);
   for(const event of compressTeamLog(res.log)){if(token!==teamView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hp){current=current.map((f,i)=>({...f,hp:event.hp[i]}));renderTeamField(current);}if(!teamView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}
   if(token!==teamView.token||!practice.open)return;renderTeamField(res.fighters);const q=res.quest,won=res.winner===0;let extra='';if(q){extra=`<p><b>${q.reward?num(q.reward)+'コイン獲得':'報酬なし'}</b></p><div class="quest-result-goal">挑戦目標：${esc(st.goal.text)}<br><b class="${q.goalDone?'ok':'ng'}">${q.goalDone?'達成！':'未達成'}</b></div>`;}
@@ -2118,9 +2193,22 @@ async function startQuestFight() {
   questView.skip=false; questView.running=true;
   questView.expanded=true; $('#questBattle').classList.add('log-wide'); $('#questViewToggle').textContent='絵を大きく';
   const feed=$('#questFeed'), button=$('#questGo'); feed.innerHTML=''; button.textContent='やり直す'; button.classList.add('running');
-  let res;
-  try { res=isFarmStage(st.id)?app.server.farmBattle(st.id,questView.ownUid):app.server.questBattle(st.id,questView.ownUid); }
-  catch(e){questView.running=false;button.textContent='戦わせる';button.classList.remove('running');toast(e.message);return;}
+  let res,ticket=null;
+  try {
+    if(onlineWalletEnabled())ticket=await OnlineRanking.beginBattle(st.id,[questView.ownUid]);
+    res=isFarmStage(st.id)?app.server.farmBattle(st.id,questView.ownUid):app.server.questBattle(st.id,questView.ownUid);
+    if(ticket){
+      const settled=await OnlineRanking.finishBattle(ticket,res.quest.cleared,res.quest.goalDone);
+      app.server.applyOnlineWallet(settled);
+      res.quest={...res.quest,reward:Number(settled.reward||0),first:!!settled.first,goalFirst:!!settled.goal_first,
+        streak:Number(settled.streak||0),multiplier:st.id==='farm_2'?1+Number(settled.streak||0)*0.1:(res.quest.multiplier||1),
+        proof:!!settled.first&&st.level===3};
+    }
+  }
+  catch(e){
+    if(onlineWalletEnabled()){try{app.server.applyOnlineWallet(await OnlineRanking.wallet());}catch(ignore){}}
+    questView.running=false;button.textContent='戦わせる';button.classList.remove('running');toast(e.message);return;
+  }
   questView.enemyId=res.quest.enemyId; renderCoins(true); questCorner(0,res.A.maxHp,res.A.maxHp); questCorner(1,res.B.maxHp,res.B.maxHp);
   const names=[res.A.name,res.B.name], wait=ms=>new Promise(r=>setTimeout(r,questView.skip?0:questView.fast?ms/4:ms));
   for(const event of compressPracticeLog(res.log,names)){if(token!==questView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hpA!=null){questCorner(0,event.hpA,res.A.maxHp);questCorner(1,event.hpB,res.B.maxHp);}if(!questView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}

@@ -108,19 +108,53 @@ Deno.serve(async (req: Request) => {
     const body = await req.json();
     const playerName = String(body.player_name || 'あなた').trim().slice(0, 12) || 'あなた';
     const rpcHeaders = { apikey:serviceKey, Authorization:`Bearer ${serviceKey}`, 'Content-Type':'application/json' };
+    const rpc = async (name: string, args: Record<string, unknown>) => {
+      const response = await fetch(`${url}/rest/v1/rpc/${name}`, { method:'POST', headers:rpcHeaders, body:JSON.stringify(args) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'サーバー処理に失敗しました');
+      return result;
+    };
     if (body.action === 'rename') {
       const response = await fetch(`${url}/rest/v1/rpc/rename_verified_entries`, { method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_name:playerName }) });
       if (!response.ok) throw new Error((await response.json()).message || '名前を更新できませんでした');
       return json(req, { ok:true });
     }
-    if (body.action === 'wallet' || body.action === 'daily') {
-      const rpc = body.action === 'daily' ? 'claim_daily_wallet' : 'wallet_status';
-      const response = await fetch(`${url}/rest/v1/rpc/${rpc}`, {
-        method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id })
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'コイン残高を確認できませんでした');
-      return json(req, result);
+    if (body.action === 'wallet' || body.action === 'status') {
+      return json(req, await rpc('game_status', { p_user_id:user.id }));
+    }
+    if (body.action === 'daily') {
+      const daily = await rpc('claim_daily_wallet', { p_user_id:user.id });
+      const status = await rpc('game_status', { p_user_id:user.id });
+      return json(req, { ...status, claimed:daily.claimed, day:daily.day, amount:daily.amount });
+    }
+    if (body.action === 'claim-stamps') {
+      return json(req, await rpc('claim_stamp_rewards', { p_user_id:user.id }));
+    }
+    if (body.action === 'claim-mission') {
+      return json(req, await rpc('claim_daily_mission', { p_user_id:user.id, p_mission:String(body.mission || '') }));
+    }
+    if (body.action === 'detail-view') {
+      return json(req, await rpc('record_detail_view', { p_user_id:user.id }));
+    }
+    if (body.action === 'expedition-start') {
+      const localUids = Array.isArray(body.local_uids) ? body.local_uids.map(Number) : [];
+      if (!localUids.length || localUids.length > 3 || localUids.some(x => !Number.isSafeInteger(x) || x < 1)) return json(req, { error:'探索メンバーが正しくありません' }, 400);
+      return json(req, await rpc('start_verified_expedition', { p_user_id:user.id, p_destination:String(body.destination || ''), p_local_uids:localUids }));
+    }
+    if (body.action === 'expedition-claim') {
+      const expeditionId = Number(body.expedition_id);
+      if (!Number.isSafeInteger(expeditionId) || expeditionId < 1) return json(req, { error:'探索が正しくありません' }, 400);
+      return json(req, await rpc('claim_verified_expedition', { p_user_id:user.id, p_expedition_id:expeditionId }));
+    }
+    if (body.action === 'battle-begin') {
+      const localUids = Array.isArray(body.local_uids) ? body.local_uids.map(Number) : [];
+      if (!localUids.length || localUids.length > 3 || localUids.some(x => !Number.isSafeInteger(x) || x < 1)) return json(req, { error:'出場個体が正しくありません' }, 400);
+      return json(req, await rpc('begin_verified_battle', { p_user_id:user.id, p_stage_id:String(body.stage_id || ''), p_local_uids:localUids }));
+    }
+    if (body.action === 'battle-finish') {
+      const ticket = String(body.ticket || '');
+      if (!/^[0-9a-f-]{36}$/i.test(ticket)) return json(req, { error:'挑戦券が正しくありません' }, 400);
+      return json(req, await rpc('finish_verified_battle', { p_user_id:user.id, p_ticket:ticket, p_won:body.won === true, p_goal:body.goal === true }));
     }
     if (body.action === 'release') {
       const localUids = Array.isArray(body.local_uids) ? body.local_uids.map(Number) : [];

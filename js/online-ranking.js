@@ -106,7 +106,7 @@
   }
 
   async function wallet() {
-    const data = await invoke({ action: 'wallet' });
+    const data = await invoke({ action: 'status' });
     if (!data || !Number.isSafeInteger(Number(data.coins))) throw new Error('オンライン残高を受け取れませんでした');
     return data;
   }
@@ -115,6 +115,24 @@
     const data = await invoke({ action: 'daily' });
     if (!data || !Number.isSafeInteger(Number(data.coins))) throw new Error('ログインボーナスを確認できませんでした');
     return data;
+  }
+
+  async function claimStamps() { return invoke({ action: 'claim-stamps' }); }
+  async function claimMission(mission) { return invoke({ action: 'claim-mission', mission }); }
+  async function recordDetail() { return invoke({ action: 'detail-view' }); }
+  async function startExpedition(destination, localUids) {
+    return invoke({ action: 'expedition-start', destination, local_uids: localUids });
+  }
+  async function claimExpedition(expeditionId) {
+    return invoke({ action: 'expedition-claim', expedition_id: expeditionId });
+  }
+  async function beginBattle(stageId, localUids) {
+    const data = await invoke({ action: 'battle-begin', stage_id: stageId, local_uids: localUids });
+    if (!data || !data.ticket) throw new Error('挑戦を開始できませんでした');
+    return data.ticket;
+  }
+  async function finishBattle(ticket, won, goal) {
+    return invoke({ action: 'battle-finish', ticket, won: !!won, goal: !!goal });
   }
 
   async function sync(playerName) {
@@ -148,5 +166,8 @@
     }));
   }
 
-  root.OnlineRanking = { configured, ensureSession, pull, wallet, daily, release, sync, ranking };
+  root.OnlineRanking = {
+    configured, ensureSession, pull, wallet, daily, claimStamps, claimMission, recordDetail,
+    startExpedition, claimExpedition, beginBattle, finishBattle, release, sync, ranking
+  };
 })(typeof window !== 'undefined' ? window : globalThis);
