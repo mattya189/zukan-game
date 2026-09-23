@@ -196,7 +196,7 @@ class GameServer {
 
     const saved = store.get(SAVE_KEY);
     this.s = saved || this._fresh();
-    this._migrate();
+    this._migrate(!!saved);
     // 世界記録は毎回、仮プレイヤーの記録から作り直し、あなたの記録だけを保存データから重ねる
     const savedHall = this.s.hall || {};
     const worldChanged = this.s.worldVer !== WORLD_VERSION;
@@ -228,12 +228,13 @@ class GameServer {
     const base = {
       v: 2,
       player: { display_name: 'あなた', coins: START_COINS, vault_cap: VAULT_CAP },
-      mine: [], zukan: {}, extraCounters: {}, nextUid: 1, hall: null
+      mine: [], zukan: {}, extraCounters: {}, nextUid: 1, hall: null,
+      tutorial: { step: 0, done: false, rewarded: false, hidden: false }
     };
     return base;
   }
 
-  _migrate() {
+  _migrate(hadSave = true) {
     const s = this.s;
     s.bests = s.bests || {};
     s.titleBook = s.titleBook || {};
@@ -243,6 +244,14 @@ class GameServer {
     s.expeditions = s.expeditions || [];
     s.onlineStampRewards = Array.isArray(s.onlineStampRewards) ? s.onlineStampRewards : null;
     s.settings = Object.assign({ sound: true, effects: 'full' }, s.settings || {});
+    // 古い保存データを使っている人には自動表示せず、再開しても報酬を重ねて渡さない。
+    s.tutorial = s.tutorial || (hadSave
+      ? { step:TUTORIAL_STEPS.length - 1, done:true, rewarded:true, hidden:false }
+      : { step:0, done:false, rewarded:false, hidden:false });
+    s.tutorial.step = Math.max(0, Math.min(TUTORIAL_STEPS.length - 1, Number(s.tutorial.step) || 0));
+    s.tutorial.done = !!s.tutorial.done;
+    s.tutorial.rewarded = !!s.tutorial.rewarded;
+    s.tutorial.hidden = !!s.tutorial.hidden;
     const qp = s.questProgress || {};
     s.questProgress = {
       cleared: qp.cleared || {}, goals: qp.goals || {}, proofs: qp.proofs || {},
@@ -274,6 +283,34 @@ class GameServer {
   player() { return { ...this.s.player }; }
   settings() { return { ...this.s.settings }; }
   setSetting(key, value) { this.s.settings[key] = value; this._save(); }
+  tutorial() { return { ...this.s.tutorial }; }
+  hideTutorial() { this.s.tutorial.hidden = true; this._save(); }
+  restartTutorial() {
+    this.s.tutorial = { step:0, done:false, rewarded:!!this.s.tutorial.rewarded, hidden:false };
+    this._save();
+    return this.tutorial();
+  }
+  advanceTutorial(stepId) {
+    const t = this.s.tutorial, current = TUTORIAL_STEPS[t.step];
+    if (t.done || !current || current.id !== stepId || current.id === 'finish') return false;
+    t.step = Math.min(TUTORIAL_STEPS.length - 1, t.step + 1);
+    t.hidden = false;
+    this._save();
+    return true;
+  }
+  finishTutorial(onlineReward = false) {
+    const t = this.s.tutorial, current = TUTORIAL_STEPS[t.step];
+    if (t.done || !current || current.id !== 'finish') return { finished:false, gained:0 };
+    let gained = 0;
+    if (!t.rewarded) {
+      t.rewarded = true;
+      if (!onlineReward) { this.s.player.coins += TUTORIAL_REWARD; gained = TUTORIAL_REWARD; }
+    }
+    t.done = true;
+    t.hidden = false;
+    this._save();
+    return { finished:true, gained };
+  }
   applyOnlineWallet(wallet) {
     const coins = Number(wallet && wallet.coins);
     if (!Number.isSafeInteger(coins) || coins < 0) throw new Error('オンライン残高が正しくありません');
@@ -844,7 +881,7 @@ class GameServer {
 const app = {
   server: null, chars: [], charMap: {}, tab: 'gacha', lastResults: [],
   selectMode: false, selected: new Set(),
-  vf: { charId: '', rarity: '', titled: false, sort: 'new' },
+  vf: { charId: '', rarity: '', titled: false, sort: 'new', combat: null },
   rk: { charId: '', stat: 'total_score', dir: 'desc', nature: NATURES[0] },
   busy: false,
   renderedDone: 0
@@ -867,6 +904,7 @@ const practice = { open:false, mode:1, ownUid:null, enemyId:'chr_002', enemyInd:
 const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 const teamView = { quest:false, stageId:null, size:2, uids:[], rows:[], enemies:[], token:0, fast:false, skip:false, running:false, expanded:false, result:null };
 let adventureView = 'home';
+const tutorialLosses = { quest:0, farm:0 };
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -1082,6 +1120,7 @@ function show(tab) {
   practice.token++;
   document.body.classList.remove('practice-mode');
   app.tab = tab;
+  if (tab === 'vault') app.vf.combat = newCombatFilter();
   app.selectMode = false; app.selected.clear();
   $$('nav.tabs button').forEach(b => { if (b.dataset.tab === tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current'); });
   const r = $('.release-bar'); if (r) r.remove();
@@ -1092,6 +1131,83 @@ function show(tab) {
 function render() {
   ({ gacha: renderGacha, zukan: renderZukan, vault: renderVault, adventure: renderAdventure, ranking: renderRanking })[app.tab]();
   updateBadges();
+  renderTutorial();
+}
+
+function tutorialTarget(step) {
+  if (!step || app.tab !== step.tab) return null;
+  if (step.target === 'pull1') return $('.pull[data-n="1"]');
+  if (step.target === 'vaultFirstRow') return $('#main .row[data-uid]');
+  if (step.target === 'zukanFirstOwned') {
+    const first = app.server.zukan()[0];
+    return first ? $(`.zcell[data-id="${first.char_id}"]`) : null;
+  }
+  if (step.target === 'questFirstStage') return adventureView === 'quests' ? $('[data-quest-stage^="q"]') : null;
+  if (step.target === 'farmEasy') return adventureView === 'quests' ? $('[data-quest-stage="farm_1"]') : null;
+  return null;
+}
+
+function tutorialText(step) {
+  const losses = tutorialLosses[step.id] || 0;
+  const retry = (step.retry || []).filter(x => losses >= x.after).sort((a,b) => b.after - a.after)[0];
+  return retry || step;
+}
+
+function clearTutorialTarget() {
+  $$('.tutorial-target').forEach(el => el.classList.remove('tutorial-target'));
+}
+
+function renderTutorial() {
+  document.querySelector('.tutorial-band')?.remove();
+  clearTutorialTarget();
+  document.body.classList.remove('tutorial-active');
+  if (!app.server) return;
+  const state = app.server.tutorial();
+  if (state.done || state.hidden) return;
+  const step = TUTORIAL_STEPS[state.step];
+  if (!step) return;
+  const text = tutorialText(step), onScreen = app.tab === step.tab && (step.tab !== 'adventure' || adventureView === 'quests');
+  const band = document.createElement('aside');
+  band.className = 'tutorial-band';
+  band.setAttribute('aria-live', 'polite');
+  band.innerHTML = `<span class="tutorial-step">${state.step + 1} / ${TUTORIAL_STEPS.length}</span><strong>${esc(text.title)}</strong><p>${esc(text.body)}</p><div class="tutorial-actions"><button class="btn" data-tutorial-later>あとで見る</button>${step.id === 'finish' ? '<button class="btn primary" data-tutorial-finish>案内を閉じる</button>' : onScreen ? '' : '<button class="btn primary" data-tutorial-go>この画面へ</button>'}</div>`;
+  document.body.appendChild(band);
+  document.body.classList.add('tutorial-active');
+  band.querySelector('[data-tutorial-later]').onclick = () => { app.server.hideTutorial(); renderTutorial(); };
+  const go = band.querySelector('[data-tutorial-go]');
+  if (go) go.onclick = () => {
+    closeDialog();
+    if (step.tab === 'adventure') adventureView = 'quests';
+    show(step.tab);
+  };
+  const finish = band.querySelector('[data-tutorial-finish]');
+  if (finish) finish.onclick = finishTutorial;
+  requestAnimationFrame(() => tutorialTarget(step)?.classList.add('tutorial-target'));
+}
+
+function tutorialEvent(stepId, won = null) {
+  if (won === true && tutorialLosses[stepId] !== undefined) tutorialLosses[stepId] = 0;
+  if (won === false && tutorialLosses[stepId] !== undefined) tutorialLosses[stepId]++;
+  if (app.server.advanceTutorial(stepId)) renderTutorial();
+}
+
+async function finishTutorial() {
+  const state = app.server.tutorial();
+  if (state.done) return;
+  try {
+    let gained = 0;
+    if (onlineWalletEnabled() && !state.rewarded) {
+      const wallet = await OnlineRanking.claimTutorial();
+      gained = Number(wallet.gained || 0);
+      app.server.applyOnlineWallet(wallet);
+      app.server.finishTutorial(true);
+    } else gained = app.server.finishTutorial(false).gained;
+    renderCoins(true);
+    renderTutorial();
+    toast(gained ? `案内おつかれさま。${TUTORIAL_REWARD}コイン（ガチャ1回分）を受け取りました` : '案内を最後まで確認しました。報酬は受け取り済みです');
+  } catch (e) {
+    toast(e.message || '案内の報酬を受け取れませんでした');
+  }
 }
 
 function cardTags(ind, max = 3) {
@@ -1166,6 +1282,7 @@ async function doPull(n) {
   renderCoins();
   app.lastResults = data.results;
   updateBadges();
+  tutorialEvent('gacha');
   try { await runShow(data.results, n); } finally { app.busy = false; }
   if (app.tab === 'gacha') renderGacha();
 }
@@ -1405,6 +1522,77 @@ const ZUKAN_GRADE_INFO = {
   B:['大神級','#E67E22'], A:['超神級','#E6394A'], S:['神話級','#8E44AD'], ORIGIN:['特殊等級','#159A9C']
 };
 const RESOLVE_LABEL = { low:'低い', mid:'ふつう', high:'高い' };
+
+// 個体を選ぶ画面で共通して使う「戦い方」の絞り込み。
+// 同じ分類ではどれか1つ、別の分類どうしではすべてに合う個体を残す。
+const COMBAT_FILTER_GROUPS = [
+  { key:'distance', label:'距離', source:'tags', items:[['近接','近接'],['遠距離','遠距離'],['飛行','飛行']] },
+  { key:'style', label:'型', source:'tags', items:[['長期戦','長期戦'],['短期決戦','短期決戦'],['分析','分析'],['高揚','高揚'],['自信','自信']] },
+  { key:'role', label:'役割', source:'tags', items:[['拘束','拘束'],['精神干渉','精神干渉'],['領域','領域'],['音','音'],['大型','大型'],['かわいい好き','かわいい好き']] },
+  { key:'resolve', label:'覚悟', source:'resolve', items:[['low','低い'],['mid','ふつう'],['high','高い']] },
+  { key:'grade', label:'等級', source:'grade', items:['F','E','D','C','B','A','S'].map(x=>[x,x]) }
+];
+
+const STAGE_RECOMMEND = {
+  chr_001:['短期決戦','遠距離'], chr_002:['high'], chr_003:['短期決戦','近接'],
+  chr_004:['飛行','遠距離'], chr_005:['遠距離','分析'], chr_006:['近接','高揚'],
+  chr_007:['短期決戦','近接'], chr_008:['短期決戦','音'], chr_009:['長期戦','大型'],
+  chr_010:['精神干渉','分析']
+};
+
+function newCombatFilter(values = []) {
+  const state = { open:false, selected:{} };
+  COMBAT_FILTER_GROUPS.forEach(g => { state.selected[g.key] = new Set(); });
+  values.forEach(value => {
+    const group = COMBAT_FILTER_GROUPS.find(g => g.items.some(([v]) => v === value));
+    if (group) state.selected[group.key].add(value);
+  });
+  return state;
+}
+
+function combatFilterValues(state) {
+  return COMBAT_FILTER_GROUPS.flatMap(g => [...state.selected[g.key]].map(value => {
+    const item = g.items.find(([v]) => v === value);
+    return { group:g, value, label:item ? item[1] : value };
+  }));
+}
+
+function combatFilterMatch(ind, state) {
+  const c = app.charMap[ind.char_id];
+  if (!c) return false;
+  return COMBAT_FILTER_GROUPS.every(g => {
+    const selected = [...state.selected[g.key]];
+    if (!selected.length) return true;
+    if (g.source === 'tags') return selected.some(value => (c.tags || []).includes(value));
+    return selected.includes(c[g.source]);
+  });
+}
+
+function filterIndividuals(all, state, charId = '') {
+  return all.filter(ind => (!charId || ind.char_id === charId) && combatFilterMatch(ind, state));
+}
+
+function combatFilterHtml(state, shown, total) {
+  const values = combatFilterValues(state);
+  const summary = values.length ? values.map(x => x.label).join('・') : '条件なし';
+  return `<div class="combat-filter-bar"><button class="btn" data-combat-filter-open aria-expanded="${state.open}">絞り込み</button><span class="combat-filter-summary" title="${esc(summary)}">${esc(summary)}</span><span class="combat-filter-count">${shown}体／${total}体</span></div>
+    <div class="combat-filter-pop" ${state.open ? '' : 'hidden'}>${COMBAT_FILTER_GROUPS.map(g => `<div class="combat-filter-group"><strong>${g.label}</strong><div class="combat-filter-chips">${g.items.map(([value,label]) => `<button class="combat-filter-chip" data-combat-filter-group="${g.key}" data-combat-filter-value="${esc(value)}" aria-pressed="${state.selected[g.key].has(value)}">${esc(label)}</button>`).join('')}</div></div>`).join('')}<button class="btn combat-filter-clear" data-combat-filter-clear ${values.length ? '' : 'disabled'}>すべて解除</button></div>`;
+}
+
+function bindCombatFilter(root, state, redraw) {
+  const open = root.querySelector('[data-combat-filter-open]');
+  if (open) open.onclick = () => { state.open = !state.open; redraw(); };
+  root.querySelectorAll('[data-combat-filter-value]').forEach(button => button.onclick = () => {
+    const selected = state.selected[button.dataset.combatFilterGroup], value = button.dataset.combatFilterValue;
+    if (selected.has(value)) selected.delete(value); else selected.add(value);
+    redraw();
+  });
+  const clear = root.querySelector('[data-combat-filter-clear]');
+  if (clear) clear.onclick = () => {
+    COMBAT_FILTER_GROUPS.forEach(g => state.selected[g.key].clear());
+    redraw();
+  };
+}
 const COMBAT_STAT_LABEL = { atk:'攻撃', def:'防御', wis:'賢さ', spd:'素早さ', sta:'持久力', amb:'野望力' };
 
 function combatEffectRowsHtml(rows) {
@@ -1458,6 +1646,7 @@ function openZukanPage(charId) {
     <section class="zukan-panel" data-zukan-panel="story" hidden><div class="story-tools"><button class="btn" id="openAllStories">すべて開く</button><button class="btn" id="closeAllStories">すべてたたむ</button></div>${[1,2,3,4,5].map(r=>zukanStorySectionHtml(c,g,r)).join('')}</section>
     <section class="zukan-panel" data-zukan-panel="combat" hidden>${combatPanelHtml(c)}</section>
     <section class="zukan-panel" data-zukan-panel="records" hidden>${hasProof ? '<div class="proof-banner">🏆 撃破の証　段階3クリア</div>' : ''}<h3 class="zukan-panel-title">見つけた称号 ${found.length} / ${TITLES.length}</h3><div class="title-list">${titleTags}</div><h3 class="zukan-panel-title">世界記録</h3><dl class="zukan-facts zukan-records">${records}</dl><button class="btn primary wide" id="seeMine" ${mineCount?'':'disabled'}>保管庫のこのキャラを見る（${mineCount}体）</button></section></div></div>`, 'zukan');
+  tutorialEvent('zukan');
   const page = body.querySelector('.zukan-page');
   const panels = [...body.querySelectorAll('[data-zukan-panel]')];
   const updateCompact = panel => page.classList.toggle('is-compact', panel.scrollTop > 12);
@@ -1498,8 +1687,9 @@ function renderVault() {
   const away = app.server.dispatchedUids();
   const holders = app.server.recordHolderUids();
   const vf = app.vf;
+  vf.combat = vf.combat || newCombatFilter();
   const list = all
-    .filter(i => (!vf.charId || i.char_id === vf.charId) && (!vf.rarity || i.rarity === Number(vf.rarity)) && (!vf.titled || (i.titles && i.titles.length)))
+    .filter(i => (!vf.charId || i.char_id === vf.charId) && (!vf.rarity || i.rarity === Number(vf.rarity)) && (!vf.titled || (i.titles && i.titles.length)) && combatFilterMatch(i, vf.combat))
     .sort(VAULT_SORTS[vf.sort][1]);
   const seen = zukanSummary();
 
@@ -1518,6 +1708,7 @@ function renderVault() {
       <select id="fSort" aria-label="並び順">${sortOpts}</select>
       <label class="check"><input type="checkbox" id="fTitled" ${vf.titled ? 'checked' : ''}>称号つきの個体だけ表示</label>
     </div>
+    ${combatFilterHtml(vf.combat, list.length, all.length)}
     ${app.selectMode ? `<div class="bulk">
       <button class="btn" data-bulk="1">★1をまとめて選ぶ</button>
       <button class="btn" data-bulk="2">★2以下をまとめて選ぶ</button>
@@ -1541,12 +1732,13 @@ function renderVault() {
           ${tags ? `<span class="tags" style="justify-content:flex-start">${tags}</span>` : ''}</span>
         <span class="rv">${num(ind.power)}<small>パワー</small></span>
       </button></li>`;
-    }).join('')}</ul>` : `<p class="muted">${all.length ? 'この条件の個体はいません。' : '保管庫は空です。ガチャを引くと、ここに個体が入ります。'}</p>`}`;
+    }).join('')}</ul>` : `<p class="muted combat-filter-empty">${all.length ? '条件に合う個体がいません。<br>条件を外してみてください。' : '保管庫は空です。ガチャを引くと、ここに個体が入ります。'}</p>`}`;
 
   $('#fChar').onchange = e => { vf.charId = e.target.value; renderVault(); };
   $('#fRar').onchange = e => { vf.rarity = e.target.value; renderVault(); };
   $('#fSort').onchange = e => { vf.sort = e.target.value; renderVault(); };
   $('#fTitled').onchange = e => { vf.titled = e.target.checked; renderVault(); };
+  bindCombatFilter(main, vf.combat, renderVault);
   $('#vselect').onclick = () => { app.selectMode = !app.selectMode; app.selected.clear(); renderVault(); };
   $$('[data-bulk]').forEach(b => {
     b.onclick = () => {
@@ -1795,6 +1987,13 @@ async function syncOnlineRanking() {
   }
 }
 
+function stageRecommendHtml(boss) {
+  const values = STAGE_RECOMMEND[boss] || [];
+  if (!values.length) return '';
+  const labels = values.map(value => value === 'high' ? '覚悟：高い' : value);
+  return `<div class="quest-recommend"><button data-quest-recommend="${values.join('|')}">おすすめで絞り込む：${esc(labels.join('・'))}</button></div>`;
+}
+
 async function renderRanking() {
   const renderId = ++rankingRenderId;
   const main = $('#main');
@@ -1858,6 +2057,7 @@ async function renderRanking() {
 function openDetail(uid) {
   let ind;
   try { ind = app.server.individual(uid, true); } catch (e) { toast(e.message); return; }
+  tutorialEvent('individual');
   if (onlineWalletEnabled() && ind.owner_id === 'me' && ind.online_verified) {
     OnlineRanking.recordDetail().then(status => { app.server.applyOnlineWallet(status); updateBadges(); }).catch(() => {});
   }
@@ -1954,6 +2154,7 @@ function openSettings() {
     <div class="setting-row"><span>効果音</span><label class="check"><input type="checkbox" id="sSound" ${st.sound ? 'checked' : ''}>鳴らす</label></div>
     <div class="setting-row"><span>ガチャ演出</span><select id="sFx"><option value="full" ${st.effects === 'full' ? 'selected' : ''}>フル</option><option value="short" ${st.effects === 'short' ? 'selected' : ''}>短め</option></select></div>
     <button class="btn wide" id="openBattleHelp" style="margin-top:12px">戦闘について</button>
+    <button class="btn wide" id="restartTutorial" style="margin-top:7px">はじめての案内をもう一度見る</button>
     <button class="btn wide" id="openSiteInfo" style="margin-top:7px">このゲームについて・利用規約</button>
     <p class="muted small" style="margin:7px 0 0;text-align:center">個人制作・開発中／無料・課金なし</p>
     <h3 style="font-size:14px;margin:16px 0 4px">データ管理</h3>
@@ -1966,9 +2167,11 @@ function openSettings() {
   body.querySelector('#sSound').onchange = e => { app.server.setSetting('sound', e.target.checked); if (e.target.checked) Sound.coin(); };
   body.querySelector('#sFx').onchange = e => app.server.setSetting('effects', e.target.value);
   body.querySelector('#openBattleHelp').onclick = openBattleHelp;
+  body.querySelector('#restartTutorial').onclick = () => { app.server.restartTutorial(); closeDialog(); show('gacha'); };
   body.querySelector('#openSiteInfo').onclick = () => openSiteInfo();
   body.querySelector('#dbgReset').onclick = async () => {
-    if (!await askConfirm('デモのデータをすべて消します。登録した画像は残ります。', '消す')) return;
+    if (!await askConfirm('デモのデータをすべて消します。オンラインの匿名プレイヤーも新しくなり、以前のランキングや残高には戻れません。登録した画像は残ります。', '消す')) return;
+    if (typeof OnlineRanking !== 'undefined') OnlineRanking.resetSession();
     app.server.reset();
     location.reload();
   };
@@ -2079,10 +2282,12 @@ function bindTeamComposer(root,onChange) {
   root.querySelectorAll('[data-team-pick]').forEach(b=>b.onclick=()=>openTeamOwnPicker(Number(b.dataset.teamPick),onChange));
 }
 
-function openTeamOwnPicker(slot,onChange,filter='') {
-  const list=app.server.vault().filter(x=>!filter||x.char_id===filter);
-  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="practice-pick-list"><ul class="rows">${list.map(ind=>{const c=app.charMap[ind.char_id],titles=(ind.titles||[]).map(titleName).filter(Boolean);return `<li><button class="row" data-team-own="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`;}).join('')||'<li class="muted small">該当する個体がいません</li>'}</ul></div>`);
-  body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value);
+function openTeamOwnPicker(slot,onChange,filter='',combat=newCombatFilter()) {
+  const all=app.server.vault(),list=filterIndividuals(all,combat,filter);
+  const redraw=()=>openTeamOwnPicker(slot,onChange,filter,combat);
+  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind=>{const c=app.charMap[ind.char_id],titles=(ind.titles||[]).map(titleName).filter(Boolean);return `<li><button class="row" data-team-own="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`;}).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value,combat);
+  bindCombatFilter(body,combat,redraw);
   body.querySelectorAll('[data-team-own]').forEach(b=>b.onclick=()=>{const uid=Number(b.dataset.teamOwn),ind=app.server.vault().find(x=>x.uid===uid),other=teamView.uids.some((x,i)=>i!==slot&&app.server.vault().find(v=>v.uid===x)?.char_id===ind.char_id);if(other){toast('同じキャラを同じチームに入れることはできません');return;}teamView.uids[slot]=uid;teamView.rows[slot]=teamView.rows[slot]||preferredRow(app.charMap[ind.char_id]);closeDialog();if($('#teamOwnCompose')||$('#battleTeamCompose'))onChange();else renderTeamBattle(teamView.quest);});
 }
 
@@ -2192,17 +2397,21 @@ function openQuestDetail(stageId) {
     : `${art(enemy,{size:86})}<span><h2>${esc(st.name)}</h2><p>敵：${esc(enemy.name)}</p><p>${enemy.grade}級・覚悟${esc(RESOLVE_LABEL[enemy.resolve])}</p></span>`;
   const featureText = st.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>') || 'なし';
   const rest = farm ? farmRemaining(stageId) : 0;
-  $('#main').innerHTML = `<section class="quest-detail"><div style="display:flex;gap:6px;margin-bottom:8px"><button class="btn" id="questDetailBack">← クエスト一覧</button><button class="btn" id="questBattleHelp">戦闘について</button></div><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
+  $('#main').innerHTML = `<section class="quest-detail"><div style="display:flex;gap:6px;margin-bottom:8px"><button class="btn" id="questDetailBack">← クエスト一覧</button><button class="btn" id="questBattleHelp">戦闘について</button></div><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}${stageRecommendHtml(st.boss)}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
   $('#questDetailBack').onclick = renderAdventure;
   $('#questBattleHelp').onclick = openBattleHelp;
   $('#chooseQuestOwn').onclick = () => openQuestPicker();
+  const recommend = $('[data-quest-recommend]');
+  if (recommend) recommend.onclick = () => openQuestPicker('', newCombatFilter(recommend.dataset.questRecommend.split('|')));
   $('#startQuest').onclick = () => { renderQuestBattle(); startQuestFight(); };
 }
 
-function openQuestPicker(filter = '') {
-  const list = app.server.vault().filter(i => !filter || i.char_id === filter);
-  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label><div class="practice-pick-list"><ul class="rows">${list.map(ind => { const c=app.charMap[ind.char_id], titles=(ind.titles||[]).map(titleName).filter(Boolean); return `<li><button class="row ${ind.uid===questView.ownUid?'selected':''}" data-quest-uid="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`; }).join('') || '<li class="muted small">該当する個体がいません</li>'}</ul></div>`);
-  $('#questFilter').onchange = e => openQuestPicker(e.target.value);
+function openQuestPicker(filter = '', combat = newCombatFilter()) {
+  const all = app.server.vault(), list = filterIndividuals(all, combat, filter);
+  const redraw = () => openQuestPicker(filter, combat);
+  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind => { const c=app.charMap[ind.char_id], titles=(ind.titles||[]).map(titleName).filter(Boolean); return `<li><button class="row ${ind.uid===questView.ownUid?'selected':''}" data-quest-uid="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`; }).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  $('#questFilter').onchange = e => openQuestPicker(e.target.value, combat);
+  bindCombatFilter(body, combat, redraw);
   body.querySelectorAll('[data-quest-uid]').forEach(b => b.onclick = () => { questView.ownUid=Number(b.dataset.questUid); closeDialog(); openQuestDetail(questView.stageId); });
 }
 
@@ -2251,6 +2460,7 @@ async function startQuestFight() {
     if(onlineWalletEnabled()){try{app.server.applyOnlineWallet(await OnlineRanking.wallet());}catch(ignore){}}
     questView.running=false;button.textContent='戦わせる';button.classList.remove('running');toast(e.message);return;
   }
+  tutorialEvent(isFarmStage(st.id) ? 'farm' : 'quest', !!res.quest.cleared);
   questView.enemyId=res.quest.enemyId; renderCoins(true); questCorner(0,res.A.maxHp,res.A.maxHp); questCorner(1,res.B.maxHp,res.B.maxHp);
   const names=[res.A.name,res.B.name], wait=ms=>new Promise(r=>setTimeout(r,questView.skip?0:questView.fast?ms/4:ms));
   for(const event of compressPracticeLog(res.log,names)){if(token!==questView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hpA!=null){questCorner(0,event.hpA,res.A.maxHp);questCorner(1,event.hpB,res.B.maxHp);}if(!questView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}
@@ -2305,21 +2515,24 @@ function practiceCorner(side, hp = null, maxHp = null) {
   };
 }
 
-function openPracticePicker(filter = '') {
+function openPracticePicker(filter = '', combat = newCombatFilter()) {
   const all = app.server.vault();
-  const list = filter ? all.filter(i => i.char_id === filter) : all;
+  const list = filterIndividuals(all, combat, filter);
+  const redraw = () => openPracticePicker(filter, combat);
   const body = openDialog(`<h2 style="margin:0 0 8px">戦う個体を選ぶ</h2>
     <label class="small">キャラで絞り込み
       <select id="practiceFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id === filter ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
     </label>
+    ${combatFilterHtml(combat,list.length,all.length)}
     <div class="practice-pick-list"><ul class="rows">${list.map(ind => {
       const c = app.charMap[ind.char_id];
       const titles = (ind.titles || []).map(titleName).filter(Boolean);
       return `<li><button class="row ${ind.uid === practice.ownUid ? 'selected' : ''}" data-practice-uid="${ind.uid}">
         ${art(c, { ind, size:44 })}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length ? `<br>称号：${titles.map(esc).join('・')}` : ''}</span></span><span class="rv">#${pad6(ind.serial)}</span>
       </button></li>`;
-    }).join('') || '<li class="muted small" style="padding:16px">該当する個体がいません</li>'}</ul></div>`);
-  body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value);
+    }).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value, combat);
+  bindCombatFilter(body, combat, redraw);
   body.querySelectorAll('[data-practice-uid]').forEach(b => b.onclick = () => {
     practice.ownUid = Number(b.dataset.practiceUid);
     closeDialog();

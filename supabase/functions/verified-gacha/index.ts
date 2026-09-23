@@ -133,6 +133,9 @@ Deno.serve(async (req: Request) => {
     if (body.action === 'claim-mission') {
       return json(req, await rpc('claim_daily_mission', { p_user_id:user.id, p_mission:String(body.mission || '') }));
     }
+    if (body.action === 'claim-tutorial') {
+      return json(req, await rpc('claim_tutorial_reward', { p_user_id:user.id }));
+    }
     if (body.action === 'detail-view') {
       return json(req, await rpc('record_detail_view', { p_user_id:user.id }));
     }

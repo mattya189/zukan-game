@@ -200,6 +200,27 @@ begin
 end;
 $$;
 
+-- はじめての案内を完了したプレイヤーへ、1アカウントにつき1度だけ渡す。
+create or replace function public.claim_tutorial_reward(p_user_id uuid)
+returns jsonb
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare gained bigint := 0;
+begin
+  insert into private.player_wallets(user_id) values (p_user_id) on conflict (user_id) do nothing;
+  with inserted as (
+    insert into private.reward_claims(user_id,reward_key,amount)
+    values (p_user_id,'tutorial:complete',100)
+    on conflict (user_id,reward_key) do nothing
+    returning amount
+  ) select coalesce(sum(amount),0) into gained from inserted;
+  update private.player_wallets set coins=coins+gained,updated_at=now() where user_id=p_user_id;
+  return public.game_status(p_user_id) || jsonb_build_object('gained',gained);
+end;
+$$;
+
 create or replace function public.claim_daily_mission(p_user_id uuid,p_mission text)
 returns jsonb
 language plpgsql
@@ -402,11 +423,11 @@ begin
 end;
 $$;
 
-revoke all on function public.game_status(uuid),public.claim_stamp_rewards(uuid),public.record_detail_view(uuid),
+revoke all on function public.game_status(uuid),public.claim_stamp_rewards(uuid),public.record_detail_view(uuid),public.claim_tutorial_reward(uuid),
   public.claim_daily_mission(uuid,text),public.start_verified_expedition(uuid,text,bigint[]),
   public.claim_verified_expedition(uuid,bigint),public.begin_verified_battle(uuid,text,bigint[]),
   public.finish_verified_battle(uuid,uuid,boolean,boolean) from public,anon,authenticated;
-grant execute on function public.game_status(uuid),public.claim_stamp_rewards(uuid),public.record_detail_view(uuid),
+grant execute on function public.game_status(uuid),public.claim_stamp_rewards(uuid),public.record_detail_view(uuid),public.claim_tutorial_reward(uuid),
   public.claim_daily_mission(uuid,text),public.start_verified_expedition(uuid,text,bigint[]),
   public.claim_verified_expedition(uuid,bigint),public.begin_verified_battle(uuid,text,bigint[]),
   public.finish_verified_battle(uuid,uuid,boolean,boolean) to service_role;

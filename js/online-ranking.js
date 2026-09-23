@@ -38,6 +38,12 @@
     return session;
   }
 
+  // 「データを消す」では匿名プレイヤーも新しくする。
+  // 端末の個体番号だけ1へ戻し、以前のオンライン個体番号と衝突するのを防ぐ。
+  function resetSession() {
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* 保存できない環境 */ }
+  }
+
   async function request(path, options, token) {
     const c = config();
     const headers = Object.assign({ apikey: c.key, Authorization: `Bearer ${token || c.key}` }, options && options.headers);
@@ -119,6 +125,7 @@
 
   async function claimStamps() { return invoke({ action: 'claim-stamps' }); }
   async function claimMission(mission) { return invoke({ action: 'claim-mission', mission }); }
+  async function claimTutorial() { return invoke({ action: 'claim-tutorial' }); }
   async function recordDetail() { return invoke({ action: 'detail-view' }); }
   async function startExpedition(destination, localUids) {
     return invoke({ action: 'expedition-start', destination, local_uids: localUids });
@@ -167,7 +174,7 @@
   }
 
   root.OnlineRanking = {
-    configured, ensureSession, pull, wallet, daily, claimStamps, claimMission, recordDetail,
+    configured, ensureSession, resetSession, pull, wallet, daily, claimStamps, claimMission, claimTutorial, recordDetail,
     startExpedition, claimExpedition, beginBattle, finishBattle, release, sync, ranking
   };
 })(typeof window !== 'undefined' ? window : globalThis);
