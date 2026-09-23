@@ -16,3 +16,24 @@ const CHARACTERS = [
   story:true,combat:true,art:{base:1,r4:0,r5:0},hue,shape:0,
   base_weight,base_height,speed_bias,wisdom_bias,luck_bias,appetite_bias,likely_natures
 }));
+
+CHARACTERS.push(
+  {
+    id:'chr_011', name:'カンカラッチ', title:'踏切音の化身', category:'マッチ神', kind:'文化種', grade:'E', resolve:'mid',
+    tags:['近接','音','領域','拘束'], stats:{atk:50,def:42,wis:55,spd:70,sta:45,amb:33}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:20, shape:0, base_weight:65, base_height:210,
+    speed_bias:800, wisdom_bias:500, luck_bias:450, appetite_bias:400, likely_natures:['せっかち','やんちゃ','おしゃべり']
+  },
+  {
+    id:'chr_012', name:'マッチ＝ネガヴォイド', title:'心淵次元の化身', category:'マッチ神', kind:'概念種', grade:'S', resolve:'high',
+    tags:['遠距離','分析','精神干渉','長期戦','拘束'], stats:{atk:58,def:52,wis:112,spd:78,sta:62,amb:72}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:280, shape:0, base_weight:400, base_height:300,
+    speed_bias:700, wisdom_bias:950, luck_bias:500, appetite_bias:200, likely_natures:['れいせい','しんちょう','ひかえめ']
+  },
+  {
+    id:'chr_013', name:'タメリス', title:'備蓄の化身', category:'マッチ神', kind:'欲望種', grade:'A', resolve:'high',
+    tags:['遠距離','飛行','長期戦','領域'], stats:{atk:48,def:62,wis:84,spd:66,sta:96,amb:70}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:15, shape:0, base_weight:120, base_height:200,
+    speed_bias:600, wisdom_bias:800, luck_bias:700, appetite_bias:900, likely_natures:['しっかりもの','しんちょう','くいしんぼう']
+  }
+);

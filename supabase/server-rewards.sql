@@ -408,6 +408,34 @@ begin
 end;
 $$;
 
+-- ガチャIDから価格を決める。ブラウザから価格や排出キャラは受け取らない。
+create or replace function public.commit_verified_pull_v3(p_user_id uuid,p_player_name text,p_entries jsonb,p_gacha_id text)
+returns jsonb language plpgsql security invoker set search_path=''
+as $$
+declare item jsonb; item_count integer; pull_cost bigint; assigned_serial bigint; clean_name text; wallet private.player_wallets%rowtype; inserted public.ranking_entries%rowtype; results jsonb:='[]'::jsonb; today_jst date:=(clock_timestamp() at time zone 'Asia/Tokyo')::date;
+begin
+  if jsonb_typeof(p_entries)<>'array' then raise exception '抽選結果が正しくありません'; end if;
+  item_count:=jsonb_array_length(p_entries); if item_count not in(1,10) then raise exception '引ける回数は1回か10回です'; end if;
+  pull_cost:=case p_gacha_id when 'normal_1' then case item_count when 1 then 100 else 1000 end when 'limited_1' then case item_count when 1 then 300 else 3000 end else null end;
+  if pull_cost is null then raise exception '開催中のガチャを確認できませんでした'; end if;
+  clean_name:=left(coalesce(nullif(btrim(p_player_name),''),'あなた'),12);
+  insert into private.player_wallets(user_id) values(p_user_id) on conflict(user_id) do nothing; select * into wallet from private.player_wallets where user_id=p_user_id for update;
+  if wallet.coins<pull_cost then raise exception 'コインが足りません（あと%コイン）',pull_cost-wallet.coins; end if;
+  update private.player_wallets set coins=coins-pull_cost,updated_at=now() where user_id=p_user_id returning * into wallet;
+  for item in select value from jsonb_array_elements(p_entries) loop
+    insert into private.character_serials(char_id,next_serial) values(item->>'char_id',2) on conflict(char_id) do update set next_serial=private.character_serials.next_serial+1 returning next_serial-1 into assigned_serial;
+    insert into public.ranking_entries(user_id,local_uid,player_name,char_id,rarity,special,nature,serial,weight,height,weight_dev,height_dev,power,speed,wisdom,luck,nature_strength,shine,appetite,total_score,updated_at,verified,verified_at)
+    values(p_user_id,(item->>'local_uid')::bigint,clean_name,item->>'char_id',(item->>'rarity')::smallint,(item->>'special')::boolean,item->>'nature',assigned_serial,(item->>'weight')::numeric,(item->>'height')::numeric,(item->>'weight_dev')::numeric,(item->>'height_dev')::numeric,(item->>'power')::integer,(item->>'speed')::integer,(item->>'wisdom')::integer,(item->>'luck')::integer,(item->>'nature_strength')::integer,(item->>'shine')::integer,(item->>'appetite')::integer,(item->>'total_score')::integer,now(),true,now()) returning * into inserted;
+    insert into private.player_collection(user_id,char_id,rarity) values(p_user_id,inserted.char_id,inserted.rarity) on conflict(user_id,char_id,rarity) do update set obtained_count=private.player_collection.obtained_count+1;
+    results:=results||jsonb_build_array(to_jsonb(inserted));
+  end loop;
+  insert into private.player_daily_progress(user_id,progress_date,pull_count) values(p_user_id,today_jst,item_count) on conflict(user_id,progress_date) do update set pull_count=private.player_daily_progress.pull_count+item_count;
+  return jsonb_build_object('coins',wallet.coins,'results',results);
+end;
+$$;
+revoke all on function public.commit_verified_pull_v3(uuid,text,jsonb,text) from public,anon,authenticated;
+grant execute on function public.commit_verified_pull_v3(uuid,text,jsonb,text) to service_role;
+
 create or replace function public.release_verified_entries(p_user_id uuid,p_local_uids bigint[])
 returns jsonb language plpgsql security invoker set search_path=''
 as $$

@@ -467,8 +467,8 @@ class GameServer {
   }
 
   // ---------- ガチャ ----------
-  _checkPull(n, serverChecksCoins = false) {
-    const cost = PULL_COST[n];
+  _checkPull(n, serverChecksCoins = false, gacha = null) {
+    const cost = gacha ? (n === 1 ? gacha.price : n === 10 ? gacha.price10 : 0) : PULL_COST[n];
     if (!cost) throw new Error('引ける回数は1回か10回です');
     const p = this.s.player;
     if (!serverChecksCoins && p.coins < cost) throw new Error(`コインが足りません（あと${cost - p.coins}コイン）`);
@@ -476,14 +476,14 @@ class GameServer {
     return cost;
   }
 
-  nextPullUids(n, serverChecksCoins = false) {
-    this._checkPull(n, serverChecksCoins);
+  nextPullUids(n, serverChecksCoins = false, gacha = null) {
+    this._checkPull(n, serverChecksCoins, gacha);
     return Array.from({ length: n }, (_, i) => this.s.nextUid + i);
   }
 
   // Supabase側で抽選済みの個体を、端末の保管庫と図鑑へ反映する。
-  acceptOnlinePull(n, incoming, onlineCoins) {
-    this._checkPull(n, true);
+  acceptOnlinePull(n, incoming, onlineCoins, gacha = null) {
+    this._checkPull(n, true, gacha);
     if (!Array.isArray(incoming) || incoming.length !== n) throw new Error('オンライン抽選の結果が正しくありません');
     const p = this.s.player;
     if (!Number.isSafeInteger(Number(onlineCoins)) || Number(onlineCoins) < 0) throw new Error('オンライン残高が正しくありません');
@@ -524,16 +524,17 @@ class GameServer {
     return { coins: p.coins, results };
   }
 
-  pull(n) {
-    const cost = this._checkPull(n);
+  pull(n, gacha = GACHAS.find(x => x.open)) {
+    const cost = this._checkPull(n, false, gacha);
     const p = this.s.player;
     p.coins -= cost;
 
     const rarities = Array.from({ length: n }, () => rollRarity(Math.random));
-    if (n === 10 && Math.max(...rarities) < 3) rarities[9] = rollRarity(Math.random, 3); // 10回で★3以上1体確定
+    const minRarity = gacha.guarantee && n === gacha.guarantee.count ? gacha.guarantee.minRarity : 1;
+    if (n === 10 && Math.max(...rarities) < minRarity) rarities[9] = rollRarity(Math.random, minRarity);
 
     const results = rarities.map(rarity => {
-      const c = pickWith(Math.random, CHARACTERS);
+      const c = this.charMap[pickWith(Math.random, gacha.chars)];
       this.s.extraCounters[c.id] = (this.s.extraCounters[c.id] || 0) + 1;
       const serial = (this.npcCounters[c.id] || 0) + this.s.extraCounters[c.id];
       const ind = generateIndividual(Math.random, c, rarity, serial);
@@ -880,7 +881,7 @@ class GameServer {
 
 
 const app = {
-  server: null, chars: [], charMap: {}, tab: 'gacha', lastResults: [],
+  server: null, chars: [], charMap: {}, tab: 'gacha', lastResults: [], gachaId: '',
   selectMode: false, selected: new Set(),
   vf: { charId: '', rarity: '', titled: false, sort: 'new', combat: null },
   rk: { charId: '', stat: 'total_score', dir: 'desc', nature: NATURES[0] },
@@ -1233,17 +1234,26 @@ function cardInner(ind) {
 // ガチャ
 // ---------------------------------------------------------------------
 function renderGacha() {
-  const rateRows = RATES.map(([r, p]) => `<tr><td>${starsHtml(r)}</td><td class="num">${p}%</td><td class="num">${RELEASE_COINS[r]}</td></tr>`).join('');
+  const openGachas = GACHAS.filter(g => g.open);
+  const gacha = openGachas.find(g => g.id === app.gachaId) || openGachas[0];
+  if (!gacha) { $('#main').innerHTML = '<p class="error">開催中のガチャがありません。</p>'; return; }
+  app.gachaId = gacha.id;
+  const rateRows = GACHA_RATES.slice().reverse().map(([r, p]) => `<tr><td>${starsHtml(r)}</td><td class="num">${p}%</td><td class="num">${RELEASE_COINS[r]}</td></tr>`).join('');
   const ratioRows = RATIO_MILESTONES.map(r => `<tr><td>${r}倍 ／ ${r === 1.5 ? '3分の2' : `${r}分の1`}${r === 100 ? '（上限）' : ''}</td><td class="num">約 1 / ${oddsText(1 / ratioChance(r))}</td></tr>`).join('');
   const powerRows = POWER_MILESTONES.map(v => `<tr><td>${v === POWER_RULE.max ? `上限 ${num(v)}` : `${num(v)} 以上`}</td><td class="num">約 1 / ${oddsText(1 / powerChance(v))}</td></tr>`).join('');
   const last = app.lastResults;
   $('#main').innerHTML = `
-    <div class="machine">${machineSvg()}</div>
+    <div class="gacha-pickers" aria-label="ガチャを選ぶ">${openGachas.map(item => `<button class="gacha-picker ${item.id === gacha.id ? 'selected' : ''}" data-gacha-id="${esc(item.id)}" aria-pressed="${item.id === gacha.id}"><img src="${esc(item.banner)}" alt="${esc(item.name)}">${item.limited ? '<span class="limited-mark">限定</span>' : ''}</button>`).join('')}</div>
+    <h2 class="gacha-title">${esc(gacha.name)}${gacha.limited ? ' <span class="tag rec">限定</span>' : ''}</h2>
+    ${gacha.subtitle ? `<p class="gacha-subtitle">${esc(gacha.subtitle)}</p>` : ''}
     <div class="pull-row">
-      <button class="pull" data-n="1">1回引く<span>100コイン</span></button>
-      <button class="pull pull-10" data-n="10">10回引く<span>1000コイン</span></button>
+      <button class="pull" data-n="1">1回引く<span>${num(gacha.price)}コイン</span></button>
+      <button class="pull pull-10" data-n="10">10回引く<span>${num(gacha.price10)}コイン</span></button>
     </div>
-    <p class="guarantee">10回引くと★3以上が1体確定</p>
+    <p class="guarantee">${esc(gacha.guaranteeText)}</p>
+    ${gacha.note ? `<p class="gacha-note">${esc(gacha.note)}</p>` : ''}
+    <h2 class="sec">出るキャラ</h2>
+    <div class="gacha-lineup">${gacha.chars.map(id => { const c = app.charMap[id]; return c ? `<div class="gacha-lineup-item">${art(c,{size:62})}<span>${esc(c.name)}</span></div>` : ''; }).join('')}</div>
     ${last.length ? `<h2 class="sec">さっき出た個体</h2><div class="cards">${last.map(ind => `<button class="card r${ind.rarity}" data-uid="${ind.uid}">${cardInner(ind)}</button>`).join('')}</div>` : ''}
     <details class="rates">
       <summary>排出率とパワーの出やすさ</summary>
@@ -1257,23 +1267,26 @@ function renderGacha() {
       <h3 style="font-size:13px;margin:12px 0 0">体重・身長・食欲（多い方にも少ない方にも伸びる）</h3>
       <table class="simple"><thead><tr><th>基準からの倍率</th><th>出る確率（片側ごと）</th></tr></thead><tbody>${ratioRows}</tbody></table>
     </details>`;
-  $$('.pull').forEach(b => { b.onclick = () => doPull(Number(b.dataset.n)); });
+  $$('[data-gacha-id]').forEach(b => { b.onclick = () => { app.gachaId = b.dataset.gachaId; app.lastResults = []; renderGacha(); }; });
+  $$('.pull').forEach(b => { b.onclick = () => doPull(Number(b.dataset.n), gacha.id); });
   $$('#main .card').forEach(el => { el.onclick = () => openDetail(Number(el.dataset.uid)); });
 }
 
-async function doPull(n) {
+async function doPull(n, gachaId = app.gachaId) {
   if (app.busy) return;
   Sound.click();
   let data;
   app.busy = true;
   try {
+    const gacha = GACHAS.find(g => g.open && g.id === gachaId);
+    if (!gacha) throw new Error('このガチャは現在開催されていません');
     if (onlineWalletEnabled()) {
-      const localUids = app.server.nextPullUids(n, true);
-      const pulled = await OnlineRanking.pull(n, app.server.player().display_name, localUids);
-      data = app.server.acceptOnlinePull(n, pulled.results, pulled.coins);
+      const localUids = app.server.nextPullUids(n, true, gacha);
+      const pulled = await OnlineRanking.pull(gacha.id, n, app.server.player().display_name, localUids);
+      data = app.server.acceptOnlinePull(n, pulled.results, pulled.coins, gacha);
       app.server.applyOnlineWallet(await OnlineRanking.wallet());
     } else {
-      data = app.server.pull(n);
+      data = app.server.pull(n, gacha);
     }
   } catch (e) {
     app.busy = false;
@@ -1376,7 +1389,7 @@ function runShow(results, n) {
         el.onclick = () => { if (el.classList.contains('flipped')) openDetail(results[el.dataset.i].uid); else flip(el); };
       });
       inner.querySelector('[data-act="close"]').onclick = close;
-      inner.querySelector('[data-act="again"]').onclick = () => { close(); setTimeout(() => doPull(n), 30); };
+      inner.querySelector('[data-act="again"]').onclick = () => { close(); setTimeout(() => doPull(n, app.gachaId), 30); };
 
       const wasSkipped = skipped;
       skipped = false;
@@ -1538,7 +1551,8 @@ const STAGE_RECOMMEND = {
   chr_001:['短期決戦','遠距離'], chr_002:['high'], chr_003:['短期決戦','近接'],
   chr_004:['飛行','遠距離'], chr_005:['遠距離','分析'], chr_006:['近接','高揚'],
   chr_007:['短期決戦','近接'], chr_008:['短期決戦','音'], chr_009:['長期戦','大型'],
-  chr_010:['精神干渉','分析']
+  chr_010:['精神干渉','分析'], chr_011:['大型','高揚'],
+  chr_012:['high','短期決戦'], chr_013:['短期決戦','長期戦']
 };
 
 function newCombatFilter(values = []) {
@@ -2236,7 +2250,7 @@ function questSectionsHtml() {
     const rest = farmRemaining(st.id), streak = st.id === 'farm_2' ? `　${progress.arenaStreak}連勝中` : '';
     return `<button class="farm-card" data-quest-stage="${st.id}"><span><strong>${esc(st.difficulty)}　${esc(st.name)}</strong><small>${st.reward}コイン${streak}</small></span><span class="farm-time" data-farm-ready="${st.id}">${rest ? fmtTime(rest) : '挑戦可'}</span></button>`;
   }).join('');
-  return `<div class="quest-heading"><h2>キャラ別の試練</h2><span class="quest-count">${clearedCount} / 30</span></div><div class="quest-grid">${trials}</div><div class="quest-heading"><h2>周回</h2></div><div class="farm-grid">${farms}</div>`;
+  return `<div class="quest-heading"><h2>キャラ別の試練</h2><span class="quest-count">${clearedCount} / ${STAGES.length}</span></div><div class="quest-grid">${trials}</div><div class="quest-heading"><h2>周回</h2></div><div class="farm-grid">${farms}</div>`;
 }
 
 function bindQuestSections(root = document) {

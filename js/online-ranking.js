@@ -103,8 +103,8 @@
     }, session.access_token);
   }
 
-  async function pull(count, playerName, localUids) {
-    const data = await invoke({ action: 'pull', count, player_name: playerName, local_uids: localUids });
+  async function pull(gachaId, count, playerName, localUids) {
+    const data = await invoke({ action: 'pull', gacha_id: gachaId, count, player_name: playerName, local_uids: localUids });
     if (!data || !Number.isSafeInteger(Number(data.coins)) || !Array.isArray(data.results) || data.results.length !== count) {
       throw new Error('オンライン抽選の結果を受け取れませんでした');
     }

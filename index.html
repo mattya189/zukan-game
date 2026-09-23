@@ -95,6 +95,17 @@ select, input[type="text"] { background: var(--paper); border: 2px solid var(--l
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- ガチャ画面 ---------- */
+.gacha-pickers { display:flex; gap:10px; overflow-x:auto; scroll-snap-type:x mandatory; padding:2px 2px 10px; margin:0 -2px; }
+.gacha-picker { position:relative; flex:0 0 88%; scroll-snap-align:center; padding:0; overflow:hidden; border:3px solid transparent; border-radius:14px; background:var(--paper); line-height:0; }
+.gacha-picker img { display:block; width:100%; aspect-ratio:2/1; object-fit:cover; }
+.gacha-picker.selected { border-color:var(--yellow); box-shadow:0 0 0 2px var(--ink); }
+.gacha-picker .limited-mark { position:absolute; top:7px; left:7px; padding:3px 9px; border-radius:99px; background:var(--red); color:#fff; font-size:11px; font-weight:900; line-height:1.4; }
+.gacha-title { margin:8px 0 0; text-align:center; font-size:19px; line-height:1.35; }
+.gacha-subtitle { margin:0; text-align:center; color:var(--ink-soft); font-size:12px; font-weight:700; }
+.gacha-note { margin:10px 0; padding:8px 10px; border-radius:10px; background:#FFF3C4; font-size:12px; font-weight:700; }
+.gacha-lineup { display:flex; gap:8px; overflow-x:auto; padding:4px 1px 8px; }
+.gacha-lineup-item { flex:0 0 76px; text-align:center; font-size:11px; font-weight:700; line-height:1.25; }
+.gacha-lineup-item .art { display:grid; margin:0 auto 3px; }
 .machine { width: 180px; margin: 4px auto 0; }
 .machine svg { display: block; width: 100%; height: auto; }
 .pull-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 6px; }
@@ -943,7 +954,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/supabase-config.js', 'data/characters.js', 'data/battle-effects.js', 'data/help-battle.js', 'data/tutorial.js', 'data/site-info.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
+  var files = ['data/supabase-config.js', 'data/characters.js', 'data/gachas.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'data/battle-effects.js', 'data/help-battle.js', 'data/tutorial.js', 'data/site-info.js', 'js/online-ranking.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;

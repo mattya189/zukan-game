@@ -22,7 +22,14 @@ const CHARACTERS: Character[] = [
   { id:'chr_008', base_weight:70, base_height:185, speed_bias:800, wisdom_bias:300, luck_bias:400, appetite_bias:650, likely_natures:['いじっぱり','せっかち','さみしがり'] },
   { id:'chr_009', base_weight:850, base_height:520, speed_bias:850, wisdom_bias:400, luck_bias:350, appetite_bias:600, likely_natures:['まじめ','がんこ','せっかち'] },
   { id:'chr_010', base_weight:1100, base_height:400, speed_bias:200, wisdom_bias:250, luck_bias:450, appetite_bias:850, likely_natures:['いじっぱり','がんこ','負けず嫌い'] }
+  ,{ id:'chr_011', base_weight:65, base_height:210, speed_bias:800, wisdom_bias:500, luck_bias:450, appetite_bias:400, likely_natures:['せっかち','やんちゃ','おしゃべり'] }
+  ,{ id:'chr_012', base_weight:400, base_height:300, speed_bias:700, wisdom_bias:950, luck_bias:500, appetite_bias:200, likely_natures:['れいせい','しんちょう','ひかえめ'] }
+  ,{ id:'chr_013', base_weight:120, base_height:200, speed_bias:600, wisdom_bias:800, luck_bias:700, appetite_bias:900, likely_natures:['しっかりもの','しんちょう','くいしんぼう'] }
 ];
+const GACHAS = {
+  normal_1: { price:100, price10:1000, chars:['chr_001','chr_002','chr_003','chr_004','chr_005','chr_006','chr_007','chr_008','chr_009','chr_010'], minRarity:3 },
+  limited_1: { price:300, price10:3000, chars:['chr_013','chr_012','chr_011','chr_004','chr_001'], minRarity:4 }
+} as const;
 const NATURES = ['さみしがり','のんき','負けず嫌い','おっとり','せっかち','きまぐれ','まじめ','ひかえめ','ようき','ゆうかん','しんちょう','れいせい','てれや','がんこ','すなお','いじっぱり','おくびょう','むじゃき','やんちゃ','くいしんぼう','ねぼすけ','おしゃべり','ロマンチスト','しっかりもの','マイペース'];
 const RATES: [number, number][] = [[5,1.5],[4,5.5],[3,15],[2,28],[1,50]];
 const STAT_MAX = 9999999;
@@ -35,7 +42,7 @@ function random() {
   crypto.getRandomValues(a);
   return ((a[0] & 0x001fffff) * 4294967296 + a[1] + 1) / 9007199254740993;
 }
-const pick = <T>(items: T[]) => items[Math.floor(random() * items.length)];
+const pick = <T>(items: readonly T[]) => items[Math.floor(random() * items.length)];
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
 function rollRarity(min = 1) {
@@ -175,12 +182,16 @@ Deno.serve(async (req: Request) => {
 
     const count = Number(body.count);
     if (count !== 1 && count !== 10) return json(req, { error:'引ける回数は1回か10回です' }, 400);
+    const gachaId = String(body.gacha_id || '');
+    const gacha = GACHAS[gachaId as keyof typeof GACHAS];
+    if (!gacha) return json(req, { error:'開催中のガチャを確認できませんでした' }, 400);
     const localUids = Array.isArray(body.local_uids) ? body.local_uids.map(Number) : [];
     if (localUids.length !== count || localUids.some(x => !Number.isSafeInteger(x) || x < 1)) return json(req, { error:'保管番号が正しくありません' }, 400);
     const rarities = Array.from({ length:count }, () => rollRarity());
-    if (count === 10 && Math.max(...rarities) < 3) rarities[9] = rollRarity(3);
-    const entries = rarities.map((rarity, i) => makeIndividual(pick(CHARACTERS), rarity, localUids[i]));
-    const response = await fetch(`${url}/rest/v1/rpc/commit_verified_pull_v2`, { method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_player_name:playerName, p_entries:entries }) });
+    if (count === 10 && Math.max(...rarities) < gacha.minRarity) rarities[9] = rollRarity(gacha.minRarity);
+    const charMap = Object.fromEntries(CHARACTERS.map(c => [c.id, c]));
+    const entries = rarities.map((rarity, i) => makeIndividual(charMap[pick(gacha.chars)], rarity, localUids[i]));
+    const response = await fetch(`${url}/rest/v1/rpc/commit_verified_pull_v3`, { method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_player_name:playerName, p_entries:entries, p_gacha_id:gachaId }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || 'オンライン抽選を保存できませんでした');
     return json(req, result);
