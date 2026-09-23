@@ -883,7 +883,7 @@ class GameServer {
 const app = {
   server: null, chars: [], charMap: {}, tab: 'gacha', lastResults: [], gachaId: '',
   selectMode: false, selected: new Set(),
-  vf: { charId: '', rarity: '', titled: false, sort: 'new', combat: null },
+  vf: { charId: '', rarity: '', sort: 'new', dir: 'desc', combat: null },
   rk: { charId: '', stat: 'total_score', dir: 'desc', nature: NATURES[0] },
   busy: false,
   renderedDone: 0
@@ -1556,7 +1556,7 @@ const STAGE_RECOMMEND = {
 };
 
 function newCombatFilter(values = []) {
-  const state = { open:false, selected:{} };
+  const state = { open:false, selected:{}, titled:false, special:false, thresholds:new Set() };
   COMBAT_FILTER_GROUPS.forEach(g => { state.selected[g.key] = new Set(); });
   values.forEach(value => {
     const group = COMBAT_FILTER_GROUPS.find(g => g.items.some(([v]) => v === value));
@@ -1566,15 +1566,22 @@ function newCombatFilter(values = []) {
 }
 
 function combatFilterValues(state) {
-  return COMBAT_FILTER_GROUPS.flatMap(g => [...state.selected[g.key]].map(value => {
+  const values = COMBAT_FILTER_GROUPS.flatMap(g => [...state.selected[g.key]].map(value => {
     const item = g.items.find(([v]) => v === value);
     return { group:g, value, label:item ? item[1] : value };
   }));
+  if (state.titled) values.push({ value:'titled', label:'称号つき' });
+  if (state.special) values.push({ value:'special', label:'特異個体' });
+  [...(state.thresholds || [])].forEach(value => values.push({ value, label:`${STAT_LABEL[value]}1,000以上` }));
+  return values;
 }
 
 function combatFilterMatch(ind, state) {
   const c = app.charMap[ind.char_id];
   if (!c) return false;
+  if (state.titled && !(ind.titles && ind.titles.length)) return false;
+  if (state.special && !ind.special) return false;
+  if ([...(state.thresholds || [])].some(key => Number(ind[key]) < 1000)) return false;
   return COMBAT_FILTER_GROUPS.every(g => {
     const selected = [...state.selected[g.key]];
     if (!selected.length) return true;
@@ -1591,7 +1598,10 @@ function combatFilterHtml(state, shown, total) {
   const values = combatFilterValues(state);
   const summary = values.length ? values.map(x => x.label).join('・') : '条件なし';
   return `<div class="combat-filter-bar"><button class="btn" data-combat-filter-open aria-expanded="${state.open}">絞り込み</button><span class="combat-filter-summary" title="${esc(summary)}">${esc(summary)}</span><span class="combat-filter-count">${shown}体／${total}体</span></div>
-    <div class="combat-filter-pop" ${state.open ? '' : 'hidden'}>${COMBAT_FILTER_GROUPS.map(g => `<div class="combat-filter-group"><strong>${g.label}</strong><div class="combat-filter-chips">${g.items.map(([value,label]) => `<button class="combat-filter-chip" data-combat-filter-group="${g.key}" data-combat-filter-value="${esc(value)}" aria-pressed="${state.selected[g.key].has(value)}">${esc(label)}</button>`).join('')}</div></div>`).join('')}<button class="btn combat-filter-clear" data-combat-filter-clear ${values.length ? '' : 'disabled'}>すべて解除</button></div>`;
+    <div class="combat-filter-pop" ${state.open ? '' : 'hidden'}>${COMBAT_FILTER_GROUPS.map(g => `<div class="combat-filter-group"><strong>${g.label}</strong><div class="combat-filter-chips">${g.items.map(([value,label]) => `<button class="combat-filter-chip" data-combat-filter-group="${g.key}" data-combat-filter-value="${esc(value)}" aria-pressed="${state.selected[g.key].has(value)}">${esc(label)}</button>`).join('')}</div></div>`).join('')}
+      <div class="combat-filter-group"><strong>個体</strong><div class="combat-filter-chips"><button class="combat-filter-chip" data-ind-filter="titled" aria-pressed="${state.titled}">称号つきだけ</button><button class="combat-filter-chip" data-ind-filter="special" aria-pressed="${state.special}">特異個体だけ</button></div></div>
+      <div class="combat-filter-group"><strong>数値（選んだ条件すべて）</strong><div class="combat-filter-chips">${[['power','パワー'],['speed','すばやさ'],['wisdom','かしこさ']].map(([value,label]) => `<button class="combat-filter-chip" data-ind-threshold="${value}" aria-pressed="${state.thresholds.has(value)}">${label}1,000以上</button>`).join('')}</div></div>
+      <button class="btn combat-filter-clear" data-combat-filter-clear ${values.length ? '' : 'disabled'}>すべて解除</button></div>`;
 }
 
 function bindCombatFilter(root, state, redraw) {
@@ -1602,9 +1612,20 @@ function bindCombatFilter(root, state, redraw) {
     if (selected.has(value)) selected.delete(value); else selected.add(value);
     redraw();
   });
+  root.querySelectorAll('[data-ind-filter]').forEach(button => button.onclick = () => {
+    const key = button.dataset.indFilter;
+    state[key] = !state[key];
+    redraw();
+  });
+  root.querySelectorAll('[data-ind-threshold]').forEach(button => button.onclick = () => {
+    const value = button.dataset.indThreshold;
+    if (state.thresholds.has(value)) state.thresholds.delete(value); else state.thresholds.add(value);
+    redraw();
+  });
   const clear = root.querySelector('[data-combat-filter-clear]');
   if (clear) clear.onclick = () => {
     COMBAT_FILTER_GROUPS.forEach(g => state.selected[g.key].clear());
+    state.titled = false; state.special = false; state.thresholds.clear();
     redraw();
   };
 }
@@ -1670,7 +1691,7 @@ function openZukanPage(charId) {
   const storyPanel=body.querySelector('[data-zukan-panel="story"]');
   body.querySelector('#openAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=true;});
   body.querySelector('#closeAllStories').onclick=()=>storyPanel.querySelectorAll('details.story').forEach(x=>{x.open=false;});
-  const mine=body.querySelector('#seeMine'); if(mine) mine.onclick=()=>{ app.vf={...app.vf,charId,rarity:'',titled:false}; closeDialog(); show('vault'); };
+  const mine=body.querySelector('#seeMine'); if(mine) mine.onclick=()=>{ app.vf={...app.vf,charId,rarity:''}; closeDialog(); show('vault'); };
   const fight=body.querySelector('[data-practice-char]'); if(fight) fight.onclick=()=>{ closeDialog(); openPracticeBattle(fight.dataset.practiceChar); };
 }
 
@@ -1681,18 +1702,67 @@ const VAULT_SORTS = {
   new: ['新しい順', (a, b) => b.uid - a.uid],
   rarity: ['レアリティ', (a, b) => b.rarity - a.rarity || b.uid - a.uid],
   power: ['パワー', (a, b) => b.power - a.power],
-  total_score: ['総合', (a, b) => b.total_score - a.total_score],
-  weight: ['体重のズレ', (a, b) => Math.abs(b.weight_dev) - Math.abs(a.weight_dev)],
+  speed: ['すばやさ', (a, b) => b.speed - a.speed],
+  wisdom: ['かしこさ', (a, b) => b.wisdom - a.wisdom],
+  weight: ['体重', (a, b) => b.weight - a.weight],
+  height: ['身長', (a, b) => b.height - a.height],
+  luck: ['うんのよさ', (a, b) => b.luck - a.luck],
   shine: ['かがやき', (a, b) => b.shine - a.shine],
+  appetite: ['食欲', (a, b) => b.appetite - a.appetite],
+  nature_strength: ['性格の強さ', (a, b) => b.nature_strength - a.nature_strength],
+  total_score: ['総合値', (a, b) => b.total_score - a.total_score],
   titles: ['称号の数', (a, b) => (b.titles || []).length - (a.titles || []).length || b.uid - a.uid]
 };
+
+function sortIndividuals(list, key = 'new', dir = 'desc') {
+  const sorter = (VAULT_SORTS[key] || VAULT_SORTS.new)[1];
+  return list.slice().sort((a, b) => dir === 'asc' ? sorter(b, a) : sorter(a, b));
+}
+
+function sortValue(ind, key) {
+  if (key === 'new') return [`#${pad6(ind.serial)}`, '通し番号'];
+  if (key === 'rarity') return [`★${ind.rarity}`, 'レアリティ'];
+  if (key === 'titles') return [`${(ind.titles || []).length}`, '称号'];
+  const labels = { power:'パワー', speed:'すばやさ', wisdom:'かしこさ', weight:'体重', height:'身長', luck:'うん', shine:'かがやき', appetite:'食欲', nature_strength:'性格', total_score:'総合値' };
+  const units = { weight:'kg', height:'cm' };
+  const value = key === 'weight' || key === 'height' ? Number(ind[key]).toLocaleString('ja-JP', { maximumFractionDigits:1 }) : num(ind[key]);
+  return [`${value}${units[key] || ''}`, labels[key] || 'パワー'];
+}
+
+function individualSortHtml(view) {
+  const options = Object.entries(VAULT_SORTS).map(([key,[label]]) => `<option value="${key}" ${view.sort === key ? 'selected' : ''}>${label}</option>`).join('');
+  return `<div class="individual-sort"><label>並べ替え<select data-ind-sort>${options}</select></label><label>順序<select data-ind-dir><option value="desc" ${view.dir !== 'asc' ? 'selected' : ''}>高い順</option><option value="asc" ${view.dir === 'asc' ? 'selected' : ''}>低い順</option></select></label></div>`;
+}
+
+function bindIndividualSort(root, view, redraw) {
+  const sort = root.querySelector('[data-ind-sort]'), dir = root.querySelector('[data-ind-dir]');
+  if (sort) sort.onchange = () => { view.sort = sort.value; redraw(); };
+  if (dir) dir.onchange = () => { view.dir = dir.value; redraw(); };
+}
+
+function releaseRisk(ind) {
+  return !!(ind.special || (ind.titles || []).length >= 2 || Number(ind.power) >= 1000 || Number(ind.speed) >= 1000 || Number(ind.wisdom) >= 1000);
+}
+
+function individualRowHtml(ind, options = {}) {
+  const c = app.charMap[ind.char_id], key = options.sort || 'power';
+  const [value,label] = sortValue(ind,key);
+  const titles = (ind.titles || []).map(titleName).filter(Boolean);
+  const tags = [ind.special ? '<em class="tag sp">特異個体</em>' : '', ...titles.slice(0,3).map(t => `<em class="tag title">${esc(t)}</em>`)].join('');
+  const stat = (name, short) => `<span class="${key === name ? 'active' : ''}">${short} ${num(ind[name])}</span>`;
+  const classes = ['row','individual-row',options.selected ? 'selected' : '',options.dim ? 'dim' : '',options.warning ? 'release-warning' : ''].filter(Boolean).join(' ');
+  return `<button class="${classes}" ${options.attr || ''}>${art(c,{ind,size:48})}<span class="individual-main"><span class="individual-top"><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><span class="individual-sort-value">${value}<small>${esc(label)}</small></span></span><span class="rs individual-meta">#${pad6(ind.serial)}　${esc(ind.nature)}　${Number(ind.weight).toLocaleString('ja-JP',{maximumFractionDigits:1})}kg</span><span class="individual-stats">${stat('power','P')}<i>／</i>${stat('speed','速')}<i>／</i>${stat('wisdom','賢')}</span>${tags ? `<span class="tags individual-tags">${tags}</span>` : ''}</span></button>`;
+}
+
+function pickerView(view) { return view || { sort:'power', dir:'desc' }; }
 
 function protectedReason(ind, away, holders) {
   if (ind.locked) return 'ロック中';
   if (away.has(ind.uid)) return '探索中';
   if (ind.special) return '特異個体';
   if (holders.has(ind.uid)) return '世界記録';
-  if (ind.titles && ind.titles.length) return '称号つき';
+  if ((ind.titles || []).length >= 2) return '称号が2つ以上';
+  if (Number(ind.power) >= 1000 || Number(ind.speed) >= 1000 || Number(ind.wisdom) >= 1000) return '能力値1,000以上';
   return '';
 }
 
@@ -1703,14 +1773,12 @@ function renderVault() {
   const holders = app.server.recordHolderUids();
   const vf = app.vf;
   vf.combat = vf.combat || newCombatFilter();
-  const list = all
-    .filter(i => (!vf.charId || i.char_id === vf.charId) && (!vf.rarity || i.rarity === Number(vf.rarity)) && (!vf.titled || (i.titles && i.titles.length)) && combatFilterMatch(i, vf.combat))
-    .sort(VAULT_SORTS[vf.sort][1]);
+  const list = sortIndividuals(all
+    .filter(i => (!vf.charId || i.char_id === vf.charId) && (!vf.rarity || i.rarity === Number(vf.rarity)) && combatFilterMatch(i, vf.combat)), vf.sort, vf.dir);
   const seen = zukanSummary();
 
   const charOpts = `<option value="">全キャラ</option>` + app.chars.filter(c => seen[c.id]).map(c => `<option value="${c.id}" ${c.id === vf.charId ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
   const rarOpts = `<option value="">全レア</option>` + [5, 4, 3, 2, 1].map(r => `<option value="${r}" ${String(r) === String(vf.rarity) ? 'selected' : ''}>★${r}</option>`).join('');
-  const sortOpts = Object.entries(VAULT_SORTS).map(([k, [label]]) => `<option value="${k}" ${k === vf.sort ? 'selected' : ''}>${label}</option>`).join('');
 
   main.innerHTML = `
     <div class="toolbar">
@@ -1720,39 +1788,26 @@ function renderVault() {
     <div class="filter-row">
       <select id="fChar" aria-label="キャラ">${charOpts}</select>
       <select id="fRar" aria-label="レアリティ">${rarOpts}</select>
-      <select id="fSort" aria-label="並び順">${sortOpts}</select>
-      <label class="check"><input type="checkbox" id="fTitled" ${vf.titled ? 'checked' : ''}>称号つきの個体だけ表示</label>
+      <span></span>
     </div>
+    ${individualSortHtml(vf)}
     ${combatFilterHtml(vf.combat, list.length, all.length)}
     ${app.selectMode ? `<div class="bulk">
       <button class="btn" data-bulk="1">★1をまとめて選ぶ</button>
       <button class="btn" data-bulk="2">★2以下をまとめて選ぶ</button>
       <button class="btn" data-bulk="0">選択を解除</button>
-    </div><p class="muted small" style="margin:-4px 0 10px">まとめて選ぶときは、ロック中・探索中・特異個体・世界記録・称号つきの個体を除きます。</p>` : ''}
+    </div><p class="muted small" style="margin:-4px 0 10px">まとめて選ぶときは、ロック中・探索中・特異個体・世界記録・称号2つ以上・能力値1,000以上の個体を除きます。</p>` : ''}
     ${list.length ? `<ul class="rows">${list.map(ind => {
       const c = app.charMap[ind.char_id];
       const sel = app.selected.has(ind.uid);
       const blocked = ind.locked || away.has(ind.uid);
-      const tags = [
-        away.has(ind.uid) ? '<em class="tag exp">探索中</em>' : '',
-        ind.locked ? '<em class="tag">ロック</em>' : '',
-        ind.special ? '<em class="tag sp">特異</em>' : '',
-        holders.has(ind.uid) ? '<em class="tag rec">世界記録</em>' : '',
-        ...(ind.titles || []).slice(0, 2).map(t => `<em class="tag title">${esc(titleName(t))}</em>`)
-      ].join('');
-      return `<li><button class="row ${sel ? 'selected' : ''} ${app.selectMode && blocked ? 'dim' : ''}" data-uid="${ind.uid}" ${app.selectMode ? `aria-pressed="${sel}"` : ''}>
-        ${art(c, { ind, size: 48 })}
-        <span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br>
-          <span class="rs">#${pad6(ind.serial)} ${esc(ind.nature)} ${Number(ind.weight).toFixed(1)}kg</span>
-          ${tags ? `<span class="tags" style="justify-content:flex-start">${tags}</span>` : ''}</span>
-        <span class="rv">${num(ind.power)}<small>パワー</small></span>
-      </button></li>`;
+      const statusTags = [away.has(ind.uid) ? '<em class="tag exp">探索中</em>' : '', ind.locked ? '<em class="tag">ロック</em>' : '', holders.has(ind.uid) ? '<em class="tag rec">世界記録</em>' : ''].join('');
+      return `<li>${individualRowHtml(ind,{sort:vf.sort,selected:sel,dim:app.selectMode&&blocked,warning:app.selectMode&&sel&&releaseRisk(ind),attr:`data-uid="${ind.uid}" ${app.selectMode ? `aria-pressed="${sel}"` : ''}`})}${statusTags ? `<span class="individual-status">${statusTags}</span>` : ''}</li>`;
     }).join('')}</ul>` : `<p class="muted combat-filter-empty">${all.length ? '条件に合う個体がいません。<br>条件を外してみてください。' : '保管庫は空です。ガチャを引くと、ここに個体が入ります。'}</p>`}`;
 
   $('#fChar').onchange = e => { vf.charId = e.target.value; renderVault(); };
   $('#fRar').onchange = e => { vf.rarity = e.target.value; renderVault(); };
-  $('#fSort').onchange = e => { vf.sort = e.target.value; renderVault(); };
-  $('#fTitled').onchange = e => { vf.titled = e.target.checked; renderVault(); };
+  bindIndividualSort(main, vf, renderVault);
   bindCombatFilter(main, vf.combat, renderVault);
   $('#vselect').onclick = () => { app.selectMode = !app.selectMode; app.selected.clear(); renderVault(); };
   $$('[data-bulk]').forEach(b => {
@@ -1785,12 +1840,15 @@ function renderVault() {
 
 function releaseConfirmText(uids) {
   const w = app.server.releaseWarnings(uids);
+  const selected = new Set(uids.map(Number));
+  const risky = app.server.vault().filter(ind => selected.has(ind.uid) && releaseRisk(ind));
   const notes = [];
   if (w.special) notes.push(`特異個体 ${w.special}体`);
   if (w.record) notes.push(`世界記録を持つ個体 ${w.record}体`);
   if (w.titled) notes.push(`称号つき ${w.titled}体`);
   if (w.high) notes.push(`★4以上 ${w.high}体`);
-  return notes.length ? `\n\n次の個体が含まれています：\n・${notes.join('\n・')}` : '';
+  const detail = notes.length ? `\n\n次の個体が含まれています：\n・${notes.join('\n・')}` : '';
+  return risky.length ? `${detail}\n\n⚠ 強い個体が${risky.length}体含まれています（称号2つ以上・能力値1,000以上・特異個体）。\nこの個体を送り出しますか？` : detail;
 }
 
 async function releaseOnlineIndividuals(individuals) {
@@ -1812,7 +1870,7 @@ function renderReleaseBar(all) {
   const picked = all.filter(i => app.selected.has(i.uid));
   const rewardable = onlineWalletEnabled() ? picked.filter(i => i.online_verified) : picked;
   const gain = rewardable.reduce((s, i) => s + RELEASE_COINS[i.rarity] * (i.special ? 5 : 1), 0);
-  bar.innerHTML = `<div class="inner"><span>${picked.length}体選択中（+${num(gain)}コイン）</span><button class="btn danger" ${picked.length ? '' : 'disabled'}>送り出す</button></div>`;
+  bar.innerHTML = `<div class="inner"><span><b>${picked.length}体選択中</b><small>合計 +${num(gain)}コイン</small></span><button class="btn danger" ${picked.length ? '' : 'disabled'}>送り出す</button></div>`;
   bar.querySelector('button').onclick = async () => {
     const uids = picked.map(i => i.uid);
     if (!await askConfirm(`${picked.length}体を送り出して、${num(gain)}コインを受け取ります。送り出した個体は戻せません。${releaseConfirmText(uids)}`, '送り出す')) return;
@@ -2297,11 +2355,13 @@ function bindTeamComposer(root,onChange) {
   root.querySelectorAll('[data-team-pick]').forEach(b=>b.onclick=()=>openTeamOwnPicker(Number(b.dataset.teamPick),onChange));
 }
 
-function openTeamOwnPicker(slot,onChange,filter='',combat=newCombatFilter()) {
-  const all=app.server.vault(),list=filterIndividuals(all,combat,filter);
-  const redraw=()=>openTeamOwnPicker(slot,onChange,filter,combat);
-  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind=>{const c=app.charMap[ind.char_id],titles=(ind.titles||[]).map(titleName).filter(Boolean);return `<li><button class="row" data-team-own="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`;}).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
-  body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value,combat);
+function openTeamOwnPicker(slot,onChange,filter='',combat=newCombatFilter(),view=null) {
+  view=pickerView(view);
+  const all=app.server.vault(),list=sortIndividuals(filterIndividuals(all,combat,filter),view.sort,view.dir);
+  const redraw=()=>openTeamOwnPicker(slot,onChange,filter,combat,view);
+  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{sort:view.sort,selected:teamView.uids[slot]===ind.uid,attr:`data-team-own="${ind.uid}"`})}</li>`).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value,combat,view);
+  bindIndividualSort(body,view,redraw);
   bindCombatFilter(body,combat,redraw);
   body.querySelectorAll('[data-team-own]').forEach(b=>b.onclick=()=>{const uid=Number(b.dataset.teamOwn),ind=app.server.vault().find(x=>x.uid===uid),other=teamView.uids.some((x,i)=>i!==slot&&app.server.vault().find(v=>v.uid===x)?.char_id===ind.char_id);if(other){toast('同じキャラを同じチームに入れることはできません');return;}teamView.uids[slot]=uid;teamView.rows[slot]=teamView.rows[slot]||preferredRow(app.charMap[ind.char_id]);closeDialog();if($('#teamOwnCompose')||$('#battleTeamCompose'))onChange();else renderTeamBattle(teamView.quest);});
 }
@@ -2421,11 +2481,13 @@ function openQuestDetail(stageId) {
   $('#startQuest').onclick = () => { renderQuestBattle(); startQuestFight(); };
 }
 
-function openQuestPicker(filter = '', combat = newCombatFilter()) {
-  const all = app.server.vault(), list = filterIndividuals(all, combat, filter);
-  const redraw = () => openQuestPicker(filter, combat);
-  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind => { const c=app.charMap[ind.char_id], titles=(ind.titles||[]).map(titleName).filter(Boolean); return `<li><button class="row ${ind.uid===questView.ownUid?'selected':''}" data-quest-uid="${ind.uid}">${art(c,{ind,size:44})}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length?`<br>称号：${titles.map(esc).join('・')}`:''}</span></span><span class="rv">#${pad6(ind.serial)}</span></button></li>`; }).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
-  $('#questFilter').onchange = e => openQuestPicker(e.target.value, combat);
+function openQuestPicker(filter = '', combat = newCombatFilter(), view = null) {
+  view=pickerView(view);
+  const all = app.server.vault(), list = sortIndividuals(filterIndividuals(all, combat, filter),view.sort,view.dir);
+  const redraw = () => openQuestPicker(filter, combat, view);
+  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind => `<li>${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===questView.ownUid,attr:`data-quest-uid="${ind.uid}"`})}</li>`).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  $('#questFilter').onchange = e => openQuestPicker(e.target.value, combat, view);
+  bindIndividualSort(body,view,redraw);
   bindCombatFilter(body, combat, redraw);
   body.querySelectorAll('[data-quest-uid]').forEach(b => b.onclick = () => { questView.ownUid=Number(b.dataset.questUid); closeDialog(); openQuestDetail(questView.stageId); });
 }
@@ -2530,23 +2592,21 @@ function practiceCorner(side, hp = null, maxHp = null) {
   };
 }
 
-function openPracticePicker(filter = '', combat = newCombatFilter()) {
+function openPracticePicker(filter = '', combat = newCombatFilter(), view = null) {
+  view=pickerView(view);
   const all = app.server.vault();
-  const list = filterIndividuals(all, combat, filter);
-  const redraw = () => openPracticePicker(filter, combat);
+  const list = sortIndividuals(filterIndividuals(all, combat, filter),view.sort,view.dir);
+  const redraw = () => openPracticePicker(filter, combat, view);
   const body = openDialog(`<h2 style="margin:0 0 8px">戦う個体を選ぶ</h2>
     <label class="small">キャラで絞り込み
       <select id="practiceFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id === filter ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
     </label>
-    ${combatFilterHtml(combat,list.length,all.length)}
+    ${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}
     <div class="practice-pick-list"><ul class="rows">${list.map(ind => {
-      const c = app.charMap[ind.char_id];
-      const titles = (ind.titles || []).map(titleName).filter(Boolean);
-      return `<li><button class="row ${ind.uid === practice.ownUid ? 'selected' : ''}" data-practice-uid="${ind.uid}">
-        ${art(c, { ind, size:44 })}<span><span class="rt">${esc(c.name)} ${starsHtml(ind.rarity)}</span><br><span class="rs">パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}${titles.length ? `<br>称号：${titles.map(esc).join('・')}` : ''}</span></span><span class="rv">#${pad6(ind.serial)}</span>
-      </button></li>`;
+      return `<li>${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===practice.ownUid,attr:`data-practice-uid="${ind.uid}"`})}</li>`;
     }).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
-  body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value, combat);
+  body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value, combat, view);
+  bindIndividualSort(body,view,redraw);
   bindCombatFilter(body, combat, redraw);
   body.querySelectorAll('[data-practice-uid]').forEach(b => b.onclick = () => {
     practice.ownUid = Number(b.dataset.practiceUid);
