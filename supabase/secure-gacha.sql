@@ -26,19 +26,11 @@ create table if not exists private.character_serials (
   next_serial bigint not null check (next_serial > 0)
 );
 
-create table if not exists private.gacha_daily_usage (
-  user_id uuid not null references auth.users(id) on delete cascade,
-  usage_date date not null,
-  pull_count integer not null default 0 check (pull_count >= 0 and pull_count <= 100),
-  primary key (user_id, usage_date)
-);
-
 alter table private.character_serials enable row level security;
-alter table private.gacha_daily_usage enable row level security;
 
-revoke all on table private.character_serials, private.gacha_daily_usage from public, anon, authenticated;
+revoke all on table private.character_serials from public, anon, authenticated;
 grant usage on schema private to service_role;
-grant select, insert, update on table private.character_serials, private.gacha_daily_usage to service_role;
+grant select, insert, update on table private.character_serials to service_role;
 
 create or replace function public.commit_verified_pull(p_user_id uuid, p_player_name text, p_entries jsonb)
 returns setof public.ranking_entries
@@ -55,11 +47,6 @@ begin
   item_count := jsonb_array_length(p_entries);
   if item_count not in (1, 10) then raise exception '引ける回数は1回か10回です'; end if;
   clean_name := left(coalesce(nullif(btrim(p_player_name), ''), 'あなた'), 12);
-
-  insert into private.gacha_daily_usage(user_id, usage_date, pull_count)
-  values (p_user_id, (now() at time zone 'Asia/Tokyo')::date, item_count)
-  on conflict (user_id, usage_date) do update
-    set pull_count = private.gacha_daily_usage.pull_count + excluded.pull_count;
 
   for item in select value from jsonb_array_elements(p_entries)
   loop
@@ -123,3 +110,6 @@ end;
 $$;
 
 revoke all on function public.prepare_ranking_entry() from public, anon, authenticated;
+
+-- 旧版で使っていた1日100体制限の記録は、制限廃止後は不要。
+drop table if exists private.gacha_daily_usage;
