@@ -1954,6 +1954,8 @@ function openSettings() {
     <div class="setting-row"><span>効果音</span><label class="check"><input type="checkbox" id="sSound" ${st.sound ? 'checked' : ''}>鳴らす</label></div>
     <div class="setting-row"><span>ガチャ演出</span><select id="sFx"><option value="full" ${st.effects === 'full' ? 'selected' : ''}>フル</option><option value="short" ${st.effects === 'short' ? 'selected' : ''}>短め</option></select></div>
     <button class="btn wide" id="openBattleHelp" style="margin-top:12px">戦闘について</button>
+    <button class="btn wide" id="openSiteInfo" style="margin-top:7px">このゲームについて・利用規約</button>
+    <p class="muted small" style="margin:7px 0 0;text-align:center">個人制作・開発中／無料・課金なし</p>
     <h3 style="font-size:14px;margin:16px 0 4px">データ管理</h3>
     <div style="display:flex;flex-wrap:wrap;gap:6px">
       <button class="btn danger" id="dbgReset">データを消す</button>
@@ -1964,6 +1966,7 @@ function openSettings() {
   body.querySelector('#sSound').onchange = e => { app.server.setSetting('sound', e.target.checked); if (e.target.checked) Sound.coin(); };
   body.querySelector('#sFx').onchange = e => app.server.setSetting('effects', e.target.value);
   body.querySelector('#openBattleHelp').onclick = openBattleHelp;
+  body.querySelector('#openSiteInfo').onclick = () => openSiteInfo();
   body.querySelector('#dbgReset').onclick = async () => {
     if (!await askConfirm('デモのデータをすべて消します。登録した画像は残ります。', '消す')) return;
     app.server.reset();
@@ -1974,6 +1977,22 @@ function openSettings() {
 function openBattleHelp() {
   const body = openDialog(`<h2 style="margin:0 0 10px">戦闘について</h2><div class="battle-help-list">${HELP_BATTLE.map((item, index) => `<details ${index === 0 ? 'open' : ''}><summary>${esc(item.title)}</summary><p class="battle-help-body">${esc(item.body)}</p></details>`).join('')}</div>`);
   return body;
+}
+
+function siteInfoPage(id) {
+  return SITE_INFO_PAGES.find(page => page.id === id);
+}
+
+function openSiteInfo(id = '') {
+  if (!id) {
+    const body = openDialog(`<span class="site-info-badge">個人制作・開発中</span><h2 style="margin:0 0 5px">ガチャ図鑑</h2><p class="site-info-lead">趣味で制作・公開している無料ゲームです。遊ぶ前に、以下の内容をご確認ください。</p><div class="site-info-menu">${SITE_INFO_PAGES.map(page => `<button class="btn wide" data-site-info="${page.id}">${esc(page.title)}</button>`).join('')}</div><p class="site-info-updated">最終更新：${esc(SITE_INFO_UPDATED)}</p>`);
+    body.querySelectorAll('[data-site-info]').forEach(button => { button.onclick = () => openSiteInfo(button.dataset.siteInfo); });
+    return;
+  }
+  const page = siteInfoPage(id);
+  if (!page) return openSiteInfo();
+  const body = openDialog(`<button class="btn site-info-back" id="siteInfoBack">← 一覧へ戻る</button><h2 style="margin:0 38px 5px 0">${esc(page.title)}</h2><p class="site-info-lead">${esc(page.lead)}</p>${page.sections.map(([heading, text]) => `<section class="site-info-section"><h3>${esc(heading)}</h3><p>${esc(text)}</p></section>`).join('')}${page.link ? `<a class="btn primary wide" href="${esc(page.link.url)}" target="_blank" rel="noopener noreferrer" style="display:block;text-align:center;margin-top:12px">${esc(page.link.label)}</a>` : ''}<p class="site-info-updated">最終更新：${esc(SITE_INFO_UPDATED)}</p>`);
+  body.querySelector('#siteInfoBack').onclick = () => openSiteInfo();
 }
 
 function showLoginBonus(info) {

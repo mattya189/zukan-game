@@ -246,6 +246,16 @@ table.simple td.num { font-family: var(--dot); text-align: right; white-space: n
 .battle-help-list summary::after { content: "＋"; float: right; }
 .battle-help-list details[open] summary::after { content: "−"; }
 .battle-help-body { margin: 0; padding: 0 11px 11px; white-space: pre-line; font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.site-info-badge { display: inline-block; margin-bottom: 7px; padding: 3px 9px; border-radius: 99px; background: #FFF3C4; font-size: 11px; font-weight: 900; }
+.site-info-lead { margin: 0 0 12px; font-size: 14px; line-height: 1.7; font-weight: 700; }
+.site-info-menu { display: grid; gap: 7px; }
+.site-info-menu .btn { text-align: left; }
+.site-info-section { padding: 11px 0; border-top: 1px solid var(--line); }
+.site-info-section:first-of-type { border-top: 0; }
+.site-info-section h3 { margin: 0 0 4px; font-size: 14px; }
+.site-info-section p { margin: 0; white-space: pre-line; font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
+.site-info-updated { margin: 14px 0 0; text-align: right; color: var(--ink-soft); font-size: 11px; }
+.site-info-back { margin-bottom: 10px; }
 .zfacts { background: #fff; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px !important; }
 .story { background: #fff; border-radius: 12px; border-left: 4px solid var(--ink); margin-top: 6px; }
 .story summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; gap: 3px; }
@@ -902,7 +912,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/supabase-config.js', 'data/characters.js', 'data/battle-effects.js', 'data/help-battle.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
+  var files = ['data/supabase-config.js', 'data/characters.js', 'data/battle-effects.js', 'data/help-battle.js', 'data/site-info.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;
