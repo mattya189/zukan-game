@@ -245,7 +245,8 @@ class GameServer {
     s.onlineStampRewards = Array.isArray(s.onlineStampRewards) ? s.onlineStampRewards : null;
     s.settings = Object.assign({ sound: true, effects: 'full' }, s.settings || {});
     // 古い保存データを使っている人には自動表示せず、再開しても報酬を重ねて渡さない。
-    s.tutorial = s.tutorial || (hadSave
+    const hasPlayed = !!(s.mine.length || Object.keys(s.zukan || {}).length || Number(s.nextUid) > 1);
+    s.tutorial = s.tutorial || (hadSave && hasPlayed
       ? { step:TUTORIAL_STEPS.length - 1, done:true, rewarded:true, hidden:false }
       : { step:0, done:false, rewarded:false, hidden:false });
     s.tutorial.step = Math.max(0, Math.min(TUTORIAL_STEPS.length - 1, Number(s.tutorial.step) || 0));
@@ -2713,6 +2714,11 @@ async function boot() {
   $('#settingsBtn').onclick = () => app.server && openSettings();
   try {
     await ImageStore.open();
+    // 修正前の「データを消す」で残った空の保存データも、新規開始として復旧する。
+    const beforeBoot = store.get(SAVE_KEY);
+    const emptyReset = beforeBoot && !beforeBoot.tutorial && !(beforeBoot.mine || []).length
+      && !Object.keys(beforeBoot.zukan || {}).length && Number(beforeBoot.nextUid || 1) <= 1;
+    if (emptyReset && typeof OnlineRanking !== 'undefined' && OnlineRanking.configured()) OnlineRanking.resetSession();
     app.server = new GameServer();
     app.server.init();
     app.chars = app.server.characters;
