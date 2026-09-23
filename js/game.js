@@ -1407,11 +1407,26 @@ const ZUKAN_GRADE_INFO = {
 const RESOLVE_LABEL = { low:'低い', mid:'ふつう', high:'高い' };
 const COMBAT_STAT_LABEL = { atk:'攻撃', def:'防御', wis:'賢さ', spd:'素早さ', sta:'持久力', amb:'野望力' };
 
+function combatEffectRowsHtml(rows) {
+  return `<dl class="combat-effect-list">${rows.map(([name, text]) => `<div class="combat-effect-row ${name === '弱点' ? 'weak' : ''}"><dt>${esc(name)}</dt><dd>${esc(text)}</dd></div>`).join('')}</dl>`;
+}
+
+function combatEffectsHtml(charId) {
+  const effect = BATTLE_EFFECTS[charId];
+  if (!effect) return '';
+  const team = TEAM_EFFECTS[charId] || [];
+  return `<details class="combat-effects" open><summary>ゲームでの動き</summary><div class="combat-effects-body">
+    <p class="combat-role">${esc(effect.role)}</p>
+    ${combatEffectRowsHtml(effect.effects || [])}
+    ${team.length ? `<h4 class="combat-team-title">集団戦での効果</h4>${combatEffectRowsHtml(team)}` : ''}
+  </div></details>`;
+}
+
 function combatPanelHtml(c) {
   const data = COMBATS[c.id] || { type:'読み込み中', sections:[] };
   const bars = Object.entries(c.stats).map(([key,value]) => `<div class="combat-stat"><span>${COMBAT_STAT_LABEL[key]}</span><div><i style="width:${value}%"></i></div><b>${value}</b></div>`).join('');
   const sections = data.sections.map(([heading,text], index) => `<details class="story" ${index === 0 ? 'open' : ''}><summary><span class="story-label">${esc(heading)}</span><span class="story-preview">${esc(String(text).split('\n')[0])}</span><span class="story-more">続きを読む</span><span class="story-less">たたむ</span></summary><div class="story-body">${zukanStoryTextHtml(text)}</div></details>`).join('');
-  return `<span class="combat-type">${esc(data.type)}</span><div class="combat-stats">${bars}</div><div class="combat-labels"><b>覚悟：${RESOLVE_LABEL[c.resolve]}</b>${c.tags.map(tag => `<em>${esc(tag)}</em>`).join('')}</div>${sections}<button class="btn primary wide" data-practice-char="${c.id}" style="margin-top:12px">このキャラと練習試合をする</button>`;
+  return `<span class="combat-type">${esc(data.type)}</span><div class="combat-stats">${bars}</div><div class="combat-labels"><b>覚悟：${RESOLVE_LABEL[c.resolve]}</b>${c.tags.map(tag => `<em>${esc(tag)}</em>`).join('')}</div>${combatEffectsHtml(c.id)}${sections}<button class="btn primary wide" data-practice-char="${c.id}" style="margin-top:12px">このキャラと練習試合をする</button>`;
 }
 
 function openZukanPage(charId) {
@@ -1938,6 +1953,7 @@ function openSettings() {
     </label>
     <div class="setting-row"><span>効果音</span><label class="check"><input type="checkbox" id="sSound" ${st.sound ? 'checked' : ''}>鳴らす</label></div>
     <div class="setting-row"><span>ガチャ演出</span><select id="sFx"><option value="full" ${st.effects === 'full' ? 'selected' : ''}>フル</option><option value="short" ${st.effects === 'short' ? 'selected' : ''}>短め</option></select></div>
+    <button class="btn wide" id="openBattleHelp" style="margin-top:12px">戦闘について</button>
     <h3 style="font-size:14px;margin:16px 0 4px">データ管理</h3>
     <div style="display:flex;flex-wrap:wrap;gap:6px">
       <button class="btn danger" id="dbgReset">データを消す</button>
@@ -1947,11 +1963,17 @@ function openSettings() {
   };
   body.querySelector('#sSound').onchange = e => { app.server.setSetting('sound', e.target.checked); if (e.target.checked) Sound.coin(); };
   body.querySelector('#sFx').onchange = e => app.server.setSetting('effects', e.target.value);
+  body.querySelector('#openBattleHelp').onclick = openBattleHelp;
   body.querySelector('#dbgReset').onclick = async () => {
     if (!await askConfirm('デモのデータをすべて消します。登録した画像は残ります。', '消す')) return;
     app.server.reset();
     location.reload();
   };
+}
+
+function openBattleHelp() {
+  const body = openDialog(`<h2 style="margin:0 0 10px">戦闘について</h2><div class="battle-help-list">${HELP_BATTLE.map((item, index) => `<details ${index === 0 ? 'open' : ''}><summary>${esc(item.title)}</summary><p class="battle-help-body">${esc(item.body)}</p></details>`).join('')}</div>`);
+  return body;
 }
 
 function showLoginBonus(info) {
@@ -2151,8 +2173,9 @@ function openQuestDetail(stageId) {
     : `${art(enemy,{size:86})}<span><h2>${esc(st.name)}</h2><p>敵：${esc(enemy.name)}</p><p>${enemy.grade}級・覚悟${esc(RESOLVE_LABEL[enemy.resolve])}</p></span>`;
   const featureText = st.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>') || 'なし';
   const rest = farm ? farmRemaining(stageId) : 0;
-  $('#main').innerHTML = `<section class="quest-detail"><button class="btn" id="questDetailBack">← クエスト一覧</button><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
+  $('#main').innerHTML = `<section class="quest-detail"><div style="display:flex;gap:6px;margin-bottom:8px"><button class="btn" id="questDetailBack">← クエスト一覧</button><button class="btn" id="questBattleHelp">戦闘について</button></div><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
   $('#questDetailBack').onclick = renderAdventure;
+  $('#questBattleHelp').onclick = openBattleHelp;
   $('#chooseQuestOwn').onclick = () => openQuestPicker();
   $('#startQuest').onclick = () => { renderQuestBattle(); startQuestFight(); };
 }
@@ -2392,7 +2415,7 @@ function renderPracticeBattle() {
     <div class="practice-top"><button class="practice-mini practice-back" id="practiceBack">← 冒険</button><h1>対戦（練習試合）</h1><button class="practice-mini battle-view-toggle" id="practiceViewToggle">${practice.expanded?'絵を大きく':'実況を広く'}</button></div>
     <div class="battle-mode-switch">${[1,2,3].map(n=>`<button data-battle-mode="${n}" class="${n===1?'active':''}">${n}対${n}</button>`).join('')}</div>
     <div class="practice-versus"><div class="practice-corner" id="practiceCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="practiceCorner1"></div></div>
-    <div class="practice-stage"><div class="practice-stage-row"><label for="practiceStage">舞台</label><select id="practiceStage">${presetOptions}<option value="custom" ${practice.stageIndex < 0 ? 'selected' : ''}>オリジナルの舞台</option></select><button class="practice-mini" id="practiceFeatures">特徴</button></div><p class="practice-feature-line">特徴：${practice.features.length ? practice.features.map(esc).join('・') : 'なし'}</p></div>
+    <div class="practice-stage"><div class="practice-stage-row"><label for="practiceStage">舞台</label><select id="practiceStage">${presetOptions}<option value="custom" ${practice.stageIndex < 0 ? 'selected' : ''}>オリジナルの舞台</option></select><button class="practice-mini" id="practiceFeatures">特徴</button><button class="practice-mini" id="practiceBattleHelp" aria-label="戦闘について">？</button></div><p class="practice-feature-line">特徴：${practice.features.length ? practice.features.map(esc).join('・') : 'なし'}</p></div>
     <div class="practice-feed" id="practiceFeed" aria-live="polite"></div>
     <div class="practice-actions"><button id="practiceReroll">相手を<br>引き直す</button><button id="practiceSpeed">実況：<br>${practice.fast ? 'はやい' : 'ふつう'}</button><button id="practiceSkip">結果まで<br>飛ばす</button><button class="go" id="practiceGo">戦わせる</button></div>
   </section>`;
@@ -2402,6 +2425,7 @@ function renderPracticeBattle() {
   $('#practiceViewToggle').onclick = e => { practice.expanded=!practice.expanded; $('#practiceBattle').classList.toggle('log-wide',practice.expanded); e.currentTarget.textContent=practice.expanded?'絵を大きく':'実況を広く'; };
   $$('[data-battle-mode]').forEach(b=>b.onclick=()=>{const n=Number(b.dataset.battleMode);if(n===1)return;practice.mode=n;prepareTeam(n,false);teamView.expanded=false;renderTeamBattle(false);});
   $('#practiceFeatures').onclick = () => openPracticeFeatures();
+  $('#practiceBattleHelp').onclick = openBattleHelp;
   $('#practiceStage').onchange = e => {
     if (e.target.value === 'custom') { practice.stageIndex = -1; practice.expanded=false; $('#practiceBattle').classList.remove('log-wide'); $('#practiceViewToggle').textContent='実況を広く'; return; }
     practice.stageIndex = Number(e.target.value);

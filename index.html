@@ -224,6 +224,28 @@ table.simple td.num { font-family: var(--dot); text-align: right; white-space: n
 .combat-labels { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:12px; }
 .combat-labels b, .combat-labels em { font-style:normal; font-size:11px; border-radius:5px; padding:2px 7px; background:#E6EBF3; }
 .combat-labels b { background:#FFF3C4; }
+.combat-effects { margin: 12px 0; border: 2px solid var(--line); border-radius: 12px; background: #fff; overflow: hidden; }
+.combat-effects > summary { padding: 10px 12px; cursor: pointer; font-weight: 900; background: #E6EBF3; list-style: none; }
+.combat-effects > summary::-webkit-details-marker { display: none; }
+.combat-effects > summary::after { content: "＋"; float: right; }
+.combat-effects[open] > summary::after { content: "−"; }
+.combat-effects-body { padding: 10px 12px 12px; }
+.combat-role { margin: 0 0 8px; padding: 8px 10px; border-radius: 9px; background: #FFF3C4; font-size: 14px; line-height: 1.55; font-weight: 900; }
+.combat-effect-list { margin: 0; }
+.combat-effect-row { padding: 8px 0; border-top: 1px solid var(--line); }
+.combat-effect-row:first-child { border-top: 0; }
+.combat-effect-row dt { font-size: 13px; font-weight: 900; }
+.combat-effect-row dd { margin: 3px 0 0; color: var(--ink-soft); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.combat-effect-row.weak { margin: 4px -6px 0; padding: 8px 6px; border-radius: 8px; border-top: 0; background: #FFF0F1; }
+.combat-effect-row.weak dt, .combat-effect-row.weak dd { color: #B62436; }
+.combat-team-title { margin: 12px 0 2px; padding-top: 10px; border-top: 2px solid var(--ink); font-size: 13px; }
+.battle-help-list { display: grid; gap: 7px; clear: both; }
+.battle-help-list details { border: 1.5px solid var(--line); border-radius: 10px; background: #fff; overflow: hidden; }
+.battle-help-list summary { padding: 9px 11px; cursor: pointer; font-weight: 900; list-style: none; }
+.battle-help-list summary::-webkit-details-marker { display: none; }
+.battle-help-list summary::after { content: "＋"; float: right; }
+.battle-help-list details[open] summary::after { content: "−"; }
+.battle-help-body { margin: 0; padding: 0 11px 11px; white-space: pre-line; font-size: 13px; line-height: 1.75; overflow-wrap: anywhere; }
 .zfacts { background: #fff; border-radius: 10px; padding: 8px 10px; margin-bottom: 8px !important; }
 .story { background: #fff; border-radius: 12px; border-left: 4px solid var(--ink); margin-top: 6px; }
 .story summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; gap: 3px; }
@@ -880,7 +902,7 @@ table.wr tr.lo td.n { color: #2E86DE; }
 (function () {
   var v = Math.floor(Date.now() / 600000);
   window.ASSET_VERSION = v;
-  var files = ['data/supabase-config.js', 'data/characters.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
+  var files = ['data/supabase-config.js', 'data/characters.js', 'data/battle-effects.js', 'data/help-battle.js', 'data/rules.js', 'js/battle.js', 'js/team.js', 'data/stages.js', 'data/team-stages.js', 'js/online-ranking.js', 'js/game.js'];
   files.forEach(function (f) {
     var s = document.createElement('script');
     s.src = f + '?v=' + v;
