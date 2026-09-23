@@ -381,12 +381,64 @@ class GameServer {
   }
 
   // ---------- ガチャ ----------
-  pull(n) {
+  _checkPull(n) {
     const cost = PULL_COST[n];
     if (!cost) throw new Error('引ける回数は1回か10回です');
     const p = this.s.player;
     if (p.coins < cost) throw new Error(`コインが足りません（あと${cost - p.coins}コイン）`);
     if (this.s.mine.length + n > p.vault_cap) throw new Error('保管庫がいっぱいです。個体を送り出してから引いてください');
+    return cost;
+  }
+
+  nextPullUids(n) {
+    this._checkPull(n);
+    return Array.from({ length: n }, (_, i) => this.s.nextUid + i);
+  }
+
+  // Supabase側で抽選済みの個体を、端末の保管庫と図鑑へ反映する。
+  acceptOnlinePull(n, incoming) {
+    const cost = this._checkPull(n);
+    if (!Array.isArray(incoming) || incoming.length !== n) throw new Error('オンライン抽選の結果が正しくありません');
+    const p = this.s.player;
+    p.coins -= cost;
+    const results = incoming.map(raw => {
+      const c = this.charMap[raw.char_id];
+      const uid = Number(raw.local_uid);
+      if (!c || !Number.isSafeInteger(uid) || uid < 1 || this.s.mine.some(i => i.uid === uid)) {
+        throw new Error('オンライン抽選の個体を保管できませんでした');
+      }
+      const ind = {
+        char_id: c.id, uid, owner_id: 'me', serial: Number(raw.serial), rarity: Number(raw.rarity),
+        weight: Number(raw.weight), height: Number(raw.height), power: Number(raw.power),
+        speed: Number(raw.speed), wisdom: Number(raw.wisdom), luck: Number(raw.luck),
+        nature: String(raw.nature), nature_strength: Number(raw.nature_strength), shine: Number(raw.shine),
+        appetite: Number(raw.appetite), weight_dev: Number(raw.weight_dev), height_dev: Number(raw.height_dev),
+        special: !!raw.special, total_score: Number(raw.total_score), locked: false,
+        obtained_at: String(raw.obtained_at || new Date(this.now()).toISOString()), online_verified: true
+      };
+      ind.titles = titlesOf(ind, c);
+      this.s.mine.push(ind);
+      this.s.nextUid = Math.max(this.s.nextUid, uid + 1);
+
+      const zk = `${c.id}:${ind.rarity}`;
+      const isNew = !this.s.zukan[zk];
+      const z = this.s.zukan[zk] || { char_id: c.id, rarity: ind.rarity, count: 0, special_count: 0 };
+      z.count++; if (ind.special) z.special_count++;
+      this.s.zukan[zk] = z;
+      const newTitles = ind.titles.filter(t => !(this.s.titleBook[c.id] || []).includes(t));
+      ind.titles.forEach(t => this._addTitle(c.id, t));
+      const records = this._updateHall(ind, p.display_name);
+      const bests = this._updateBests(ind);
+      return { ...ind, records, bests, isNew, newTitles };
+    });
+    this._progress('pull', n);
+    this._save();
+    return { coins: p.coins, results };
+  }
+
+  pull(n) {
+    const cost = this._checkPull(n);
+    const p = this.s.player;
     p.coins -= cost;
 
     const rarities = Array.from({ length: n }, () => rollRarity(Math.random));
@@ -1036,8 +1088,20 @@ async function doPull(n) {
   if (app.busy) return;
   Sound.click();
   let data;
-  try { data = app.server.pull(n); } catch (e) { toast(e.message); return; }
   app.busy = true;
+  try {
+    if (typeof OnlineRanking !== 'undefined' && OnlineRanking.configured()) {
+      const localUids = app.server.nextPullUids(n);
+      const rows = await OnlineRanking.pull(n, app.server.player().display_name, localUids);
+      data = app.server.acceptOnlinePull(n, rows);
+    } else {
+      data = app.server.pull(n);
+    }
+  } catch (e) {
+    app.busy = false;
+    toast(e.message || 'ガチャを引けませんでした');
+    return;
+  }
   renderCoins();
   app.lastResults = data.results;
   updateBadges();
@@ -1438,6 +1502,15 @@ function releaseConfirmText(uids) {
   return notes.length ? `\n\n次の個体が含まれています：\n・${notes.join('\n・')}` : '';
 }
 
+async function releaseOnlineIndividuals(individuals) {
+  const uids = individuals.filter(i => i.online_verified).map(i => i.uid);
+  if (!uids.length) return;
+  if (typeof OnlineRanking === 'undefined' || !OnlineRanking.configured()) {
+    throw new Error('オンライン個体を送り出すには通信が必要です');
+  }
+  await OnlineRanking.release(uids);
+}
+
 function renderReleaseBar(all) {
   let bar = $('.release-bar');
   document.body.classList.toggle('selecting', app.selectMode);
@@ -1450,6 +1523,7 @@ function renderReleaseBar(all) {
     const uids = picked.map(i => i.uid);
     if (!await askConfirm(`${picked.length}体を送り出して、${num(gain)}コインを受け取ります。送り出した個体は戻せません。${releaseConfirmText(uids)}`, '送り出す')) return;
     try {
+      await releaseOnlineIndividuals(picked);
       const r = app.server.release(uids);
       app.selectMode = false; app.selected.clear();
       gained(r.gained, `${r.count}体を送り出しました`);
@@ -1607,22 +1681,13 @@ function rankingRowsHtml(rows, stat, online) {
   }).join('')}</ul>`;
 }
 
-function rankingSignature(name, vault) {
-  return JSON.stringify([name, vault.map(i => [
-    i.uid, i.char_id, i.rarity, i.special, i.nature, i.serial, i.weight, i.height,
-    i.weight_dev, i.height_dev, i.power, i.speed, i.wisdom, i.luck,
-    i.nature_strength, i.shine, i.appetite, i.total_score
-  ])]);
-}
-
 async function syncOnlineRanking() {
-  const vault = app.server.vault();
   const name = app.server.player().display_name;
-  const signature = rankingSignature(name, vault);
+  const signature = name;
   if (signature === rankingSyncSignature) return;
   if (rankingSyncPromise) await rankingSyncPromise;
   if (signature === rankingSyncSignature) return;
-  rankingSyncPromise = OnlineRanking.sync(name, vault);
+  rankingSyncPromise = OnlineRanking.sync(name);
   try {
     await rankingSyncPromise;
     rankingSyncSignature = signature;
@@ -1761,6 +1826,7 @@ function openDetail(uid) {
     body.querySelector('#dRelease').onclick = async () => {
       if (!await askConfirm(`${c.name} #${pad6(ind.serial)} を送り出して、${num(releaseCoins)}コインを受け取ります。送り出した個体は戻せません。${releaseConfirmText([uid])}`, '送り出す')) return;
       try {
+        await releaseOnlineIndividuals([ind]);
         const r = app.server.release([uid]);
         closeDialog();
         app.lastResults = app.lastResults.filter(x => x.uid !== uid);
