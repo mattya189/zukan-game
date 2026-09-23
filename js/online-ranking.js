@@ -1,10 +1,11 @@
-// Supabase と直接通信する、ビルド不要のオンラインランキング接続。
-// 接続先が未設定または通信できない場合は、game.js が端末内ランキングへ戻す。
+// Supabase と通信する、ビルド不要のオンラインランキング接続。
+// 個体値はブラウザから登録せず、Edge Function 側で抽選する。
 (function (root) {
   'use strict';
 
   const SESSION_KEY = 'gachaZukanSupabaseSession_v1';
   const TABLE = 'ranking_entries';
+  const GACHA_FUNCTION = 'verified-gacha';
   const FIELDS = [
     'user_id', 'local_uid', 'player_name', 'char_id', 'rarity', 'special', 'nature', 'serial',
     'weight', 'height', 'weight_dev', 'height_dev', 'power', 'speed', 'wisdom', 'luck',
@@ -87,55 +88,30 @@
     return normalizeSession(data);
   }
 
-  function finite(value, min, max) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return min;
-    return Math.min(max, Math.max(min, n));
-  }
-
-  function rowOf(ind, playerName, userId) {
-    return {
-      user_id: userId,
-      local_uid: Math.max(1, Math.trunc(finite(ind.uid, 1, Number.MAX_SAFE_INTEGER))),
-      player_name: String(playerName || 'あなた').trim().slice(0, 12) || 'あなた',
-      char_id: String(ind.char_id || '').slice(0, 7),
-      rarity: Math.trunc(finite(ind.rarity, 1, 5)),
-      special: !!ind.special,
-      nature: String(ind.nature || 'まじめ').slice(0, 20),
-      serial: Math.max(1, Math.trunc(finite(ind.serial, 1, Number.MAX_SAFE_INTEGER))),
-      weight: finite(ind.weight, 0.1, 9999999),
-      height: finite(ind.height, 0.1, 9999999),
-      weight_dev: finite(ind.weight_dev, -100, 10000),
-      height_dev: finite(ind.height_dev, -100, 10000),
-      power: Math.trunc(finite(ind.power, 1, 9999999)),
-      speed: Math.trunc(finite(ind.speed, 1, 9999999)),
-      wisdom: Math.trunc(finite(ind.wisdom, 1, 9999999)),
-      luck: Math.trunc(finite(ind.luck, 1, 9999999)),
-      nature_strength: Math.trunc(finite(ind.nature_strength, 1, 9999999)),
-      shine: Math.trunc(finite(ind.shine, 1, 9999999)),
-      appetite: Math.trunc(finite(ind.appetite, 1, 9999999)),
-      total_score: Math.trunc(finite(ind.total_score, 0, 10000)),
-      updated_at: new Date().toISOString()
-    };
-  }
-
-  async function sync(playerName, individuals) {
+  async function invoke(body) {
     const session = await ensureSession();
-    const auth = session.access_token;
-    const ownFilter = encodeURIComponent(`eq.${session.user_id}`);
-    await request(`/rest/v1/${TABLE}?user_id=${ownFilter}`, {
-      method: 'DELETE',
-      headers: { Prefer: 'return=minimal' }
-    }, auth);
-    const rows = (individuals || []).map(i => rowOf(i, playerName, session.user_id));
-    if (rows.length) {
-      await request(`/rest/v1/${TABLE}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
-        body: JSON.stringify(rows)
-      }, auth);
+    return request(`/functions/v1/${GACHA_FUNCTION}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, session.access_token);
+  }
+
+  async function pull(count, playerName, localUids) {
+    const data = await invoke({ action: 'pull', count, player_name: playerName, local_uids: localUids });
+    if (!data || !Array.isArray(data.results) || data.results.length !== count) {
+      throw new Error('オンライン抽選の結果を受け取れませんでした');
     }
-    return session;
+    return data.results;
+  }
+
+  async function sync(playerName) {
+    await invoke({ action: 'rename', player_name: playerName });
+  }
+
+  async function release(localUids) {
+    if (!localUids.length) return;
+    await invoke({ action: 'release', local_uids: localUids });
   }
 
   async function ranking(options) {
@@ -158,5 +134,5 @@
     }));
   }
 
-  root.OnlineRanking = { configured, ensureSession, sync, ranking };
+  root.OnlineRanking = { configured, ensureSession, pull, release, sync, ranking };
 })(typeof window !== 'undefined' ? window : globalThis);
