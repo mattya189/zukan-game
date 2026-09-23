@@ -99,10 +99,22 @@
 
   async function pull(count, playerName, localUids) {
     const data = await invoke({ action: 'pull', count, player_name: playerName, local_uids: localUids });
-    if (!data || !Array.isArray(data.results) || data.results.length !== count) {
+    if (!data || !Number.isSafeInteger(Number(data.coins)) || !Array.isArray(data.results) || data.results.length !== count) {
       throw new Error('オンライン抽選の結果を受け取れませんでした');
     }
-    return data.results;
+    return { coins: Number(data.coins), results: data.results };
+  }
+
+  async function wallet() {
+    const data = await invoke({ action: 'wallet' });
+    if (!data || !Number.isSafeInteger(Number(data.coins))) throw new Error('オンライン残高を受け取れませんでした');
+    return data;
+  }
+
+  async function daily() {
+    const data = await invoke({ action: 'daily' });
+    if (!data || !Number.isSafeInteger(Number(data.coins))) throw new Error('ログインボーナスを確認できませんでした');
+    return data;
   }
 
   async function sync(playerName) {
@@ -110,8 +122,10 @@
   }
 
   async function release(localUids) {
-    if (!localUids.length) return;
-    await invoke({ action: 'release', local_uids: localUids });
+    if (!localUids.length) return wallet();
+    const data = await invoke({ action: 'release', local_uids: localUids });
+    if (!data || !Number.isSafeInteger(Number(data.coins))) throw new Error('オンライン残高を受け取れませんでした');
+    return { ...data, coins: Number(data.coins), gained: Number(data.gained || 0) };
   }
 
   async function ranking(options) {
@@ -134,5 +148,5 @@
     }));
   }
 
-  root.OnlineRanking = { configured, ensureSession, pull, release, sync, ranking };
+  root.OnlineRanking = { configured, ensureSession, pull, wallet, daily, release, sync, ranking };
 })(typeof window !== 'undefined' ? window : globalThis);

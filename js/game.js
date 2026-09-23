@@ -273,6 +273,18 @@ class GameServer {
   player() { return { ...this.s.player }; }
   settings() { return { ...this.s.settings }; }
   setSetting(key, value) { this.s.settings[key] = value; this._save(); }
+  applyOnlineWallet(wallet) {
+    const coins = Number(wallet && wallet.coins);
+    if (!Number.isSafeInteger(coins) || coins < 0) throw new Error('オンライン残高が正しくありません');
+    this.s.player.coins = coins;
+    this.s.onlineWallet = true;
+    if (wallet.login_last !== undefined) {
+      this.s.login.last = wallet.login_last || '';
+      this.s.login.streak = Number(wallet.login_streak || wallet.day || 0);
+    }
+    this._save();
+    return this.player();
+  }
 
   // ---------- 記録 ----------
   _updateHall(ind, ownerName) {
@@ -381,26 +393,28 @@ class GameServer {
   }
 
   // ---------- ガチャ ----------
-  _checkPull(n) {
+  _checkPull(n, serverChecksCoins = false) {
     const cost = PULL_COST[n];
     if (!cost) throw new Error('引ける回数は1回か10回です');
     const p = this.s.player;
-    if (p.coins < cost) throw new Error(`コインが足りません（あと${cost - p.coins}コイン）`);
+    if (!serverChecksCoins && p.coins < cost) throw new Error(`コインが足りません（あと${cost - p.coins}コイン）`);
     if (this.s.mine.length + n > p.vault_cap) throw new Error('保管庫がいっぱいです。個体を送り出してから引いてください');
     return cost;
   }
 
-  nextPullUids(n) {
-    this._checkPull(n);
+  nextPullUids(n, serverChecksCoins = false) {
+    this._checkPull(n, serverChecksCoins);
     return Array.from({ length: n }, (_, i) => this.s.nextUid + i);
   }
 
   // Supabase側で抽選済みの個体を、端末の保管庫と図鑑へ反映する。
-  acceptOnlinePull(n, incoming) {
-    const cost = this._checkPull(n);
+  acceptOnlinePull(n, incoming, onlineCoins) {
+    this._checkPull(n, true);
     if (!Array.isArray(incoming) || incoming.length !== n) throw new Error('オンライン抽選の結果が正しくありません');
     const p = this.s.player;
-    p.coins -= cost;
+    if (!Number.isSafeInteger(Number(onlineCoins)) || Number(onlineCoins) < 0) throw new Error('オンライン残高が正しくありません');
+    p.coins = Number(onlineCoins);
+    this.s.onlineWallet = true;
     const results = incoming.map(raw => {
       const c = this.charMap[raw.char_id];
       const uid = Number(raw.local_uid);
@@ -641,7 +655,7 @@ class GameServer {
     };
   }
 
-  release(uids) {
+  release(uids, onlineResult = null) {
     const set = new Set(uids);
     const away = this.dispatchedUids();
     let gained = 0, count = 0;
@@ -653,7 +667,13 @@ class GameServer {
       }
       return true;
     });
-    this.s.player.coins += gained;
+    if (onlineResult && Number.isSafeInteger(Number(onlineResult.coins))) {
+      this.s.player.coins = Number(onlineResult.coins);
+      gained = Number(onlineResult.gained || 0);
+      this.s.onlineWallet = true;
+    } else {
+      this.s.player.coins += gained;
+    }
     this._progress('release', count);
     this._save();
     return { gained, count, coins: this.s.player.coins };
@@ -974,6 +994,10 @@ function renderCoins(bump = false) {
   if (bump) { el.classList.remove('bump'); void el.offsetWidth; el.classList.add('bump'); }
 }
 
+function onlineWalletEnabled() {
+  return typeof OnlineRanking !== 'undefined' && OnlineRanking.configured();
+}
+
 function gained(amount, label) {
   renderCoins(true);
   Sound.coin();
@@ -1090,10 +1114,10 @@ async function doPull(n) {
   let data;
   app.busy = true;
   try {
-    if (typeof OnlineRanking !== 'undefined' && OnlineRanking.configured()) {
-      const localUids = app.server.nextPullUids(n);
-      const rows = await OnlineRanking.pull(n, app.server.player().display_name, localUids);
-      data = app.server.acceptOnlinePull(n, rows);
+    if (onlineWalletEnabled()) {
+      const localUids = app.server.nextPullUids(n, true);
+      const pulled = await OnlineRanking.pull(n, app.server.player().display_name, localUids);
+      data = app.server.acceptOnlinePull(n, pulled.results, pulled.coins);
     } else {
       data = app.server.pull(n);
     }
@@ -1504,11 +1528,11 @@ function releaseConfirmText(uids) {
 
 async function releaseOnlineIndividuals(individuals) {
   const uids = individuals.filter(i => i.online_verified).map(i => i.uid);
-  if (!uids.length) return;
-  if (typeof OnlineRanking === 'undefined' || !OnlineRanking.configured()) {
+  if (!onlineWalletEnabled()) {
+    if (!uids.length) return null;
     throw new Error('オンライン個体を送り出すには通信が必要です');
   }
-  await OnlineRanking.release(uids);
+  return uids.length ? OnlineRanking.release(uids) : OnlineRanking.wallet();
 }
 
 function renderReleaseBar(all) {
@@ -1517,14 +1541,15 @@ function renderReleaseBar(all) {
   if (!app.selectMode) { if (bar) bar.remove(); return; }
   if (!bar) { bar = document.createElement('div'); bar.className = 'release-bar'; document.body.appendChild(bar); }
   const picked = all.filter(i => app.selected.has(i.uid));
-  const gain = picked.reduce((s, i) => s + RELEASE_COINS[i.rarity] * (i.special ? 5 : 1), 0);
+  const rewardable = onlineWalletEnabled() ? picked.filter(i => i.online_verified) : picked;
+  const gain = rewardable.reduce((s, i) => s + RELEASE_COINS[i.rarity] * (i.special ? 5 : 1), 0);
   bar.innerHTML = `<div class="inner"><span>${picked.length}体選択中（+${num(gain)}コイン）</span><button class="btn danger" ${picked.length ? '' : 'disabled'}>送り出す</button></div>`;
   bar.querySelector('button').onclick = async () => {
     const uids = picked.map(i => i.uid);
     if (!await askConfirm(`${picked.length}体を送り出して、${num(gain)}コインを受け取ります。送り出した個体は戻せません。${releaseConfirmText(uids)}`, '送り出す')) return;
     try {
-      await releaseOnlineIndividuals(picked);
-      const r = app.server.release(uids);
+      const onlineResult = await releaseOnlineIndividuals(picked);
+      const r = app.server.release(uids, onlineResult);
       app.selectMode = false; app.selected.clear();
       gained(r.gained, `${r.count}体を送り出しました`);
       renderVault();
@@ -1797,7 +1822,7 @@ function openDetail(uid) {
     ind.dispatched ? '<em class="tag exp">探索中</em>' : '',
     ind.locked ? '<em class="tag">ロック中</em>' : ''
   ].join('');
-  const releaseCoins = RELEASE_COINS[ind.rarity] * (ind.special ? 5 : 1);
+  const releaseCoins = onlineWalletEnabled() && !ind.online_verified ? 0 : RELEASE_COINS[ind.rarity] * (ind.special ? 5 : 1);
 
   const body = openDialog(`
     <div class="specimen-head">
@@ -1826,8 +1851,8 @@ function openDetail(uid) {
     body.querySelector('#dRelease').onclick = async () => {
       if (!await askConfirm(`${c.name} #${pad6(ind.serial)} を送り出して、${num(releaseCoins)}コインを受け取ります。送り出した個体は戻せません。${releaseConfirmText([uid])}`, '送り出す')) return;
       try {
-        await releaseOnlineIndividuals([ind]);
-        const r = app.server.release([uid]);
+        const onlineResult = await releaseOnlineIndividuals([ind]);
+        const r = app.server.release([uid], onlineResult);
         closeDialog();
         app.lastResults = app.lastResults.filter(x => x.uid !== uid);
         gained(r.gained, '送り出しました');
@@ -2348,14 +2373,26 @@ async function boot() {
     app.server.init();
     app.chars = app.server.characters;
     app.charMap = app.server.charMap;
+    let loginInfo = null;
+    if (onlineWalletEnabled()) {
+      app.server.applyOnlineWallet(await OnlineRanking.wallet());
+      const daily = await OnlineRanking.daily();
+      app.server.applyOnlineWallet(daily);
+      if (daily.claimed) loginInfo = daily;
+    } else {
+      loginInfo = app.server.dailyLogin();
+    }
     renderCoins();
     show('gacha');
-    showLoginBonus(app.server.dailyLogin());
+    showLoginBonus(loginInfo);
     setInterval(tick, 1000);
-    document.addEventListener('visibilitychange', () => {
+    document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState !== 'visible' || !app.server) return;
-      const info = app.server.dailyLogin();
-      if (info) showLoginBonus(info);
+      try {
+        const info = onlineWalletEnabled() ? await OnlineRanking.daily() : app.server.dailyLogin();
+        if (onlineWalletEnabled()) app.server.applyOnlineWallet(info);
+        if (info && info.claimed !== false) showLoginBonus(info);
+      } catch (e) { toast(e.message || 'オンライン残高を更新できませんでした'); }
       if (!$('.show') && !practice.open) render();
     });
   } catch (e) {

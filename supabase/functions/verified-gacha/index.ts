@@ -113,20 +113,26 @@ Deno.serve(async (req: Request) => {
       if (!response.ok) throw new Error((await response.json()).message || '名前を更新できませんでした');
       return json(req, { ok:true });
     }
+    if (body.action === 'wallet' || body.action === 'daily') {
+      const rpc = body.action === 'daily' ? 'claim_daily_wallet' : 'wallet_status';
+      const response = await fetch(`${url}/rest/v1/rpc/${rpc}`, {
+        method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'コイン残高を確認できませんでした');
+      return json(req, result);
+    }
     if (body.action === 'release') {
       const localUids = Array.isArray(body.local_uids) ? body.local_uids.map(Number) : [];
       if (!localUids.length || localUids.length > 200 || localUids.some(x => !Number.isSafeInteger(x) || x < 1)) {
         return json(req, { error:'送り出す個体が正しくありません' }, 400);
       }
-      const query = new URLSearchParams({
-        user_id:`eq.${user.id}`, verified:'eq.true', local_uid:`in.(${localUids.join(',')})`, select:'local_uid'
+      const response = await fetch(`${url}/rest/v1/rpc/release_verified_entries`, {
+        method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_local_uids:localUids })
       });
-      const response = await fetch(`${url}/rest/v1/ranking_entries?${query}`, {
-        method:'DELETE', headers:{ ...rpcHeaders, Prefer:'return=representation' }
-      });
-      const deleted = await response.json();
-      if (!response.ok) throw new Error(deleted.message || 'オンライン個体を送り出せませんでした');
-      return json(req, { released:deleted.map((row: { local_uid:number }) => Number(row.local_uid)) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'オンライン個体を送り出せませんでした');
+      return json(req, result);
     }
     if (body.action !== 'pull') return json(req, { error:'操作が正しくありません' }, 400);
 
@@ -137,10 +143,10 @@ Deno.serve(async (req: Request) => {
     const rarities = Array.from({ length:count }, () => rollRarity());
     if (count === 10 && Math.max(...rarities) < 3) rarities[9] = rollRarity(3);
     const entries = rarities.map((rarity, i) => makeIndividual(pick(CHARACTERS), rarity, localUids[i]));
-    const response = await fetch(`${url}/rest/v1/rpc/commit_verified_pull`, { method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_player_name:playerName, p_entries:entries }) });
+    const response = await fetch(`${url}/rest/v1/rpc/commit_verified_pull_v2`, { method:'POST', headers:rpcHeaders, body:JSON.stringify({ p_user_id:user.id, p_player_name:playerName, p_entries:entries }) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || 'オンライン抽選を保存できませんでした');
-    return json(req, { results:result });
+    return json(req, result);
   } catch (error) {
     return json(req, { error:error instanceof Error ? error.message : 'オンライン抽選に失敗しました' }, 400);
   }
