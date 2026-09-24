@@ -928,7 +928,7 @@ const PRACTICE_STAGES = [
 const practice = { open:false, mode:1, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false, expanded:false };
 const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 const teamView = { quest:false, stageId:null, size:2, uids:[], rows:[], enemies:[], token:0, fast:false, skip:false, running:false, expanded:false, result:null };
-const relayView = { uids:[], result:null };
+const relayView = { uids:[], result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 let adventureView = 'home';
 const tutorialLosses = { quest:0, farm:0 };
 
@@ -2355,11 +2355,43 @@ function openRelayQuest(){
   const slots=Array.from({length:3},(_,i)=>{const ind=app.server.vault().find(x=>x.uid===relayView.uids[i]),c=ind&&app.charMap[ind.char_id];return`<button class="relay-slot" data-relay-slot="${i}">${c?art(c,{ind,size:52}):'<span class="relay-empty">＋</span>'}<span><b>${i+1}番手　${c?esc(c.name):'個体を選ぶ'}</b><small>${ind?`スキル ${skillCost(ind.equipped_skills)}/8　★${ind.rarity}`:'勝った個体は残りHPを引き継ぎます'}</small></span></button>`;}).join('');
   const enemies=RELAY_ENEMIES.map((x,i)=>{const c=x.ch||app.charMap[x.id];return`<div class="relay-enemy">${art(c,{size:82})}<b>${i+1}戦目</b><small>${esc(c.name)}</small></div>`;}).join('');
   $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="relayBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>逆獣三段撃破</h2><p>3対3・勝ち抜き戦</p></span></div><h3 class="sec">敵の順番</h3><div class="relay-enemies">${enemies}</div><div class="quest-info"><dl><dt>ルール</dt><dd>勝者は残りHPを引き継ぎ、敗者側だけが次の個体へ交代します。</dd><dt>報酬</dt><dd>クリアごとに1,000コイン</dd></dl></div><h3 class="sec">出撃順</h3><div class="relay-slots">${slots}</div><button class="btn danger wide" id="relayStart" ${relayView.uids.length===3?'':'disabled'}>この順番で挑戦</button></section>`;
-  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$('#relayStart').onclick=startRelayQuest;
+  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
  };draw();
 }
 function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}</li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});}
-function startRelayQuest(){try{const res=app.server.relayBattle(relayView.uids);relayView.result=res;renderCoins(true);const logs=res.bouts.map((b,i)=>`<details ${i===res.bouts.length-1?'open':''}><summary>第${i+1}戦　${esc(b.A.name)} vs ${esc(b.B.name)}　― ${b.winner===0?'勝利':'敗北'}</summary><div class="relay-log">${b.log.map(x=>`<p class="${x.kind}">R${x.round} ${esc(x.text)}</p>`).join('')}</div></details>`).join('');$('#main').innerHTML=`<section class="quest-detail"><h2>${res.winner===0?'クリア！':'敗北…'}</h2><p>${res.winner===0?'敵の3体をすべて撃破しました。':'自分の3体が先に倒れました。'}</p><p><b>${res.reward?`+${num(res.reward)}コイン`:'報酬なし'}</b></p><div class="relay-results">${logs}</div><button class="btn primary wide" id="relayAgain">編成へ戻る</button></section>`;$('#relayAgain').onclick=openRelayQuest;}catch(e){toast(e.message);}}
+
+function relayMember(side,index){
+ if(side===0){const ind=app.server.vault().find(x=>x.uid===relayView.uids[index]);return ind&&{ind,c:app.charMap[ind.char_id]};}
+ const x=RELAY_ENEMIES[index],c=x&&(x.ch||app.charMap[x.id]);return c&&{ind:x.ind,c};
+}
+function relayCorner(side,index,hp=null,maxHp=null){
+ const el=$(`#relayCorner${side}`),member=relayMember(side,index);if(!el||!member)return;
+ const {ind,c}=member,grade=ZUKAN_GRADE_INFO[c.grade]||[c.grade,'#8E99A8'],pct=hp==null||!maxHp?100:Math.max(0,hp)/maxHp*100,src=slotSrc(c,'base');
+ el.style.setProperty('--c',grade[1]);el.innerHTML=`<div class="relay-order">${side===0?'味方':'敵'} ${index+1}/3</div><div class="practice-art">${src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,ind,false,1,1)}</div><div class="practice-name">${esc(c.name)}</div><div class="practice-grade"><b>${c.grade}</b>${esc(grade[0])}・覚悟${esc(RESOLVE_LABEL[c.resolve])}</div><div class="practice-ind"><span>パ<b>${num(ind.power)}</b></span><span>速<b>${num(ind.speed)}</b></span><span>賢<b>${num(ind.wisdom)}</b></span></div><div class="practice-hpbar"><i class="${pct<=30?'low':''}" style="width:${pct}%"></i></div><div class="practice-hpnum">${hp==null?'待機中':`HP ${Math.max(0,Math.round(hp))} / ${Math.round(maxHp)}`}</div>`;
+}
+function renderRelayBattle(){
+ if(relayView.running){relayView.token++;relayView.running=false;}practice.open=true;document.body.classList.add('practice-mode');
+ $('#main').innerHTML=`<section class="practice-battle ${relayView.expanded?'log-wide':''}" id="relayBattle"><div class="practice-top"><button class="practice-mini practice-back" id="relayBattleBack">← 編成</button><h1>逆獣三段撃破</h1><button class="practice-mini battle-view-toggle" id="relayViewToggle">${relayView.expanded?'絵を大きく':'実況を広く'}</button></div><div class="practice-versus"><div class="practice-corner" id="relayCorner0"></div><div class="practice-vs">VS</div><div class="practice-corner" id="relayCorner1"></div></div><div class="practice-stage"><b id="relayBoutLabel">第1戦</b><p class="practice-feature-line">勝者は残りHPを引き継いで次の相手と戦います</p></div><div class="practice-feed" id="relayFeed" aria-live="polite"></div><div class="practice-actions"><button id="relayEdit">編成へ</button><button id="relaySpeed">実況：<br>${relayView.fast?'はやい':'ふつう'}</button><button id="relaySkip">結果まで<br>飛ばす</button><button class="go" id="relayGo">戦わせる</button></div></section>`;
+ relayCorner(0,0);relayCorner(1,0);
+ const back=()=>{practice.open=false;relayView.token++;relayView.running=false;document.body.classList.remove('practice-mode');openRelayQuest();};
+ $('#relayBattleBack').onclick=back;$('#relayEdit').onclick=back;$('#relaySpeed').onclick=e=>{relayView.fast=!relayView.fast;e.currentTarget.innerHTML=`実況：<br>${relayView.fast?'はやい':'ふつう'}`;};$('#relaySkip').onclick=()=>relayView.skip=true;$('#relayViewToggle').onclick=e=>{relayView.expanded=!relayView.expanded;$('#relayBattle').classList.toggle('log-wide',relayView.expanded);e.currentTarget.textContent=relayView.expanded?'絵を大きく':'実況を広く';};$('#relayGo').onclick=startRelayFight;
+}
+async function startRelayFight(){
+ const token=++relayView.token,feed=$('#relayFeed'),button=$('#relayGo');relayView.skip=false;relayView.running=true;relayView.expanded=true;$('#relayBattle').classList.add('log-wide');$('#relayViewToggle').textContent='絵を大きく';feed.innerHTML='';button.textContent='やり直す';button.classList.add('running');
+ let res;try{res=app.server.relayBattle(relayView.uids);}catch(e){relayView.running=false;button.classList.remove('running');button.textContent='戦わせる';toast(e.message);return;}
+ relayView.result=res;renderCoins(true);let ai=0,bi=0,carryA=null,carryB=null;const wait=ms=>new Promise(r=>setTimeout(r,relayView.skip?0:relayView.fast?ms/4:ms));
+ for(let n=0;n<res.bouts.length;n++){
+  const bout=res.bouts[n],names=[bout.A.name,bout.B.name];if(token!==relayView.token||!practice.open)return;
+  $('#relayBoutLabel').textContent=`第${n+1}戦　味方${ai+1}番手 vs 敵${bi+1}番手`;
+  relayCorner(0,ai,carryA??bout.A.maxHp,bout.A.maxHp);relayCorner(1,bi,carryB??bout.B.maxHp,bout.B.maxHp);
+  feed.insertAdjacentHTML('beforeend',`<p class="ev relay-change"><b>第${n+1}戦</b>　${esc(names[0])} VS ${esc(names[1])}</p>`);feed.scrollTop=feed.scrollHeight;await wait(800);
+  for(const event of compressPracticeLog(bout.log,names)){if(token!==relayView.token||!practice.open)return;feed.insertAdjacentHTML('beforeend',practiceEventHtml(event,names));if(event.hpA!=null){relayCorner(0,ai,event.hpA,bout.A.maxHp);relayCorner(1,bi,event.hpB,bout.B.maxHp);}if(!relayView.skip){feed.scrollTop=feed.scrollHeight;await wait(event.kind==='skill'||event.kind==='big'?900:event.kind==='sum'?700:500);}}
+  relayCorner(0,ai,bout.A.hp,bout.A.maxHp);relayCorner(1,bi,bout.B.hp,bout.B.maxHp);
+  if(bout.winner===0){carryA=bout.A.hp;carryB=null;bi++;feed.insertAdjacentHTML('beforeend',`<p class="ev relay-change">${esc(names[1])}が倒れ、次の敵が出現する！</p>`);}else{carryB=bout.B.hp;carryA=null;ai++;feed.insertAdjacentHTML('beforeend',`<p class="ev relay-change">${esc(names[0])}が倒れ、次の味方が出撃する！</p>`);}feed.scrollTop=feed.scrollHeight;await wait(1100);
+ }
+ if(token!==relayView.token||!practice.open)return;
+ feed.insertAdjacentHTML('beforeend',`<div class="practice-result"><h2>${res.winner===0?'クリア！':'敗北…'}</h2><p>${res.winner===0?'敵の3体をすべて撃破しました。':'自分の3体が先に倒れました。'}</p><p><b>${res.reward?`+${num(res.reward)}コイン`:'報酬なし'}</b></p><div class="quest-result-actions"><button id="relayRetry">もう一度挑戦</button><button id="relayResultEdit">編成へ戻る</button></div></div>`);feed.scrollTop=feed.scrollHeight;relayView.running=false;button.textContent='もう一度';button.classList.remove('running');$('#relayRetry').onclick=startRelayFight;$('#relayResultEdit').onclick=()=>{practice.open=false;document.body.classList.remove('practice-mode');openRelayQuest();};
+}
 
 function questRewardText(st) {
   if (isFarmStage(st.id)) {
