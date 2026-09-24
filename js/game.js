@@ -585,7 +585,7 @@ class GameServer {
     if (!own) throw new Error('保管庫から戦う個体を選んでください');
     if (!enemy) throw new Error('相手のキャラが見つかりません');
     return runBattle({
-      a: { ch: this.charMap[own.char_id], ind: own },
+      a: { ch: this.charMap[own.char_id], ind: {...own,loadout:own.equipped_skills||[]} },
       b: { ch: enemy, ind: enemyInd || this.rollPracticeEnemy(enemyCharId) },
       stage: stage || { name: '無名の荒野（特徴なし）', features: [] }
     });
@@ -605,7 +605,7 @@ class GameServer {
     if (uids.length !== size) throw new Error(`${size}体の個体を選んでください`);
     const own = uids.map(uid => this._questOwn(uid));
     if (new Set(own.map(x => x.char_id)).size !== own.length) throw new Error('同じキャラを同じチームに入れることはできません');
-    return own.map((ind,i) => ({ ch:this.charMap[ind.char_id], ind, row:rows[i] === 'back' ? 'back' : 'front' }));
+    return own.map((ind,i) => ({ ch:this.charMap[ind.char_id], ind:{...ind,loadout:ind.equipped_skills||[]}, row:rows[i] === 'back' ? 'back' : 'front' }));
   }
 
   teamPracticeBattle(size, uids, rows, enemyTeam, stage) {
@@ -664,7 +664,7 @@ class GameServer {
     if (!this.questUnlocked(stageId)) throw new Error('前の段階をクリアすると挑戦できます');
     const own = this._questOwn(uid), foe = this.charMap[st.boss];
     const res = runBattle({
-      a:{ ch:this.charMap[own.char_id], ind:own }, b:{ ch:foe, ind:{...ENEMY_IND[st.level]} },
+      a:{ ch:this.charMap[own.char_id], ind:{...own,loadout:own.equipped_skills||[]} }, b:{ ch:foe, ind:{...ENEMY_IND[st.level]} },
       stage:{ name:st.name, features:[...st.features], events:st.events, enemyState:st.enemyState, enemyPower:STAGE_POWER[st.id] }
     });
     const q = this.s.questProgress, cleared = res.winner === 0;
@@ -696,7 +696,7 @@ class GameServer {
     const foe = pickWith(Math.random, pool);
     q.farmReadyAt[st.id] = now + st.cooldown * 1000;
     const res = runBattle({
-      a:{ ch:this.charMap[own.char_id], ind:own }, b:{ ch:foe, ind:{...st.enemyInd} },
+      a:{ ch:this.charMap[own.char_id], ind:{...own,loadout:own.equipped_skills||[]} }, b:{ ch:foe, ind:{...st.enemyInd} },
       stage:{ name:st.name, features:[...st.features], events:st.events, enemyState:st.enemyState, enemyPower:st.enemyPower }
     });
     const cleared = res.winner === 0;
@@ -1579,6 +1579,13 @@ const STAGE_RECOMMEND = {
   chr_012:['high','短期決戦'], chr_013:['短期決戦','長期戦']
 };
 
+const RELAY_RECOMMEND_TAGS = ['短期決戦','飛行','遠距離','分析'];
+const RELAY_RECOMMEND_SLOTS = [
+  ['短期決戦','遠距離'],
+  ['飛行','短期決戦','遠距離'],
+  ['遠距離','分析','長期戦']
+];
+
 function newCombatFilter(values = []) {
   const state = { open:false, selected:{}, titled:false, special:false, thresholds:new Set() };
   COMBAT_FILTER_GROUPS.forEach(g => { state.selected[g.key] = new Set(); });
@@ -2240,10 +2247,19 @@ function openDetail(uid) {
   updateBadges();
 }
 
-function openSkillEquip(uid){
+function equipmentSummary(ind){
+ const defs=(ind.equipped_skills||[]).map(id=>SKILL_DEFS[id]).filter(Boolean),skills=defs.filter(x=>x.kind!=='passive').length,passives=defs.filter(x=>x.kind==='passive').length;
+ return defs.length?`発動スキル${skills}・パッシブ${passives}（${skillCost(ind.equipped_skills)}/${SKILL_MAX_COST}）`:`装備なし（0/${SKILL_MAX_COST}）`;
+}
+
+function equipmentGuideHtml(){
+ return `<details class="relay-equip-guide"><summary>装備（発動スキル・パッシブ）について</summary><p>装備は合計コスト${SKILL_MAX_COST}まで。発動スキルは条件を満たしたとき、パッシブは常時または攻撃を受けたときなどに自動で働きます。個体選択画面の「装備を変更」から選べます。</p></details>`;
+}
+
+function openSkillEquip(uid,options={}){
  const ind=app.server.vault().find(x=>x.uid===Number(uid));if(!ind)return;
  const ch=app.charMap[ind.char_id],selected=new Set(ind.equipped_skills||[]);
- const draw=()=>{const used=skillCost([...selected]);const body=openDialog(`<h2 style="margin:0">スキル装備</h2><p class="skill-cost">コスト <b>${used}</b> / ${SKILL_MAX_COST}</p><div class="skill-list">${Object.entries(SKILL_DEFS).map(([id,s])=>{const req=s.requirement(ind,ch),on=selected.has(id),over=!on&&used+s.cost>SKILL_MAX_COST;return`<button class="skill-row ${on?'on':''} ${req.ok?'':'locked'}" data-skill="${id}" ${!req.ok||over?'disabled':''}><span><strong>${esc(s.name)}</strong><small>コスト ${s.cost}</small></span><em>${req.ok?(on?'装備中':'装備可能'):esc(req.text)}</em><p>${esc(s.desc)}</p></button>`;}).join('')}</div><button class="btn primary wide" id="skillSave">この装備で確定</button>`);body.querySelectorAll('[data-skill]').forEach(b=>b.onclick=()=>{const id=b.dataset.skill;selected.has(id)?selected.delete(id):selected.add(id);draw();});body.querySelector('#skillSave').onclick=()=>{try{app.server.equipSkills(uid,[...selected]);closeDialog();toast('スキル装備を保存しました');}catch(e){toast(e.message);}};};draw();
+ const draw=()=>{const used=skillCost([...selected]);const body=openDialog(`<h2 style="margin:0">装備を選ぶ</h2><p class="equip-guide-mini">発動スキルもパッシブも戦闘中に自動で働きます。解放条件を満たした装備を、合計コスト${SKILL_MAX_COST}まで選べます。</p><p class="skill-cost">コスト <b>${used}</b> / ${SKILL_MAX_COST}</p><div class="skill-list">${Object.entries(SKILL_DEFS).map(([id,s])=>{const req=s.requirement(ind,ch),on=selected.has(id),over=!on&&used+s.cost>SKILL_MAX_COST,passive=s.kind==='passive';return`<button class="skill-row ${on?'on':''} ${req.ok?'':'locked'}" data-skill="${id}" ${!req.ok||over?'disabled':''}><span><strong><i class="equip-kind ${passive?'passive':''}">${passive?'パッシブ':'発動スキル'}</i>${esc(s.name)}</strong><small>コスト ${s.cost}</small></span><em>${req.ok?(on?'装備中':'装備可能'):esc(req.text)}</em><p>${esc(s.desc)}</p></button>`;}).join('')}</div>${options.back?'<button class="btn wide" id="skillBack" style="margin-bottom:7px">個体選択へ戻る</button>':''}<button class="btn primary wide" id="skillSave">この装備で確定</button>`);body.querySelectorAll('[data-skill]').forEach(b=>b.onclick=()=>{const id=b.dataset.skill;selected.has(id)?selected.delete(id):selected.add(id);draw();});const back=body.querySelector('#skillBack');if(back)back.onclick=options.back;body.querySelector('#skillSave').onclick=()=>{try{app.server.equipSkills(uid,[...selected]);toast('装備を保存しました');if(options.done)options.done();else closeDialog();}catch(e){toast(e.message);}};};draw();
 }
 
 // ---------------------------------------------------------------------
@@ -2349,16 +2365,35 @@ function bindQuestSections(root = document) {
   root.querySelectorAll('[data-team-stage]').forEach(b => b.onclick = () => openTeamQuestDetail(b.dataset.teamStage));
 }
 
+function relayAutoScore(ind,tags){
+ const c=app.charMap[ind.char_id],grade={F:0,E:1,D:2,C:3,B:4,A:5,S:6}[c.grade]||0;
+ const tagScore=tags.reduce((score,tag,index)=>score+((c.tags||[]).includes(tag)?70-index*10:0),0);
+ const valueScore=['power','speed','wisdom'].reduce((score,key)=>score+Math.log10(Math.max(1,Number(ind[key])||1)),0);
+ return tagScore+grade*5+valueScore;
+}
+
+function relayAutoLineup(){
+ const pool=app.server.vault(),picked=[],usedChars=new Set();
+ for(const tags of RELAY_RECOMMEND_SLOTS){
+  const available=pool.filter(ind=>!picked.some(x=>x.uid===ind.uid));
+  const diverse=available.filter(ind=>!usedChars.has(ind.char_id)),candidates=diverse.length?diverse:available;
+  const best=candidates.sort((a,b)=>relayAutoScore(b,tags)-relayAutoScore(a,tags))[0];
+  if(!best)return null;
+  picked.push(best);usedChars.add(best.char_id);
+ }
+ return picked.map(ind=>ind.uid);
+}
+
 function openRelayQuest(){
  relayView.uids=app.server.relayLineup().filter(uid=>app.server.vault().some(x=>x.uid===uid)).slice(0,3);
  const draw=()=>{
-  const slots=Array.from({length:3},(_,i)=>{const ind=app.server.vault().find(x=>x.uid===relayView.uids[i]),c=ind&&app.charMap[ind.char_id];return`<button class="relay-slot" data-relay-slot="${i}">${c?art(c,{ind,size:52}):'<span class="relay-empty">＋</span>'}<span><b>${i+1}番手　${c?esc(c.name):'個体を選ぶ'}</b><small>${ind?`スキル ${skillCost(ind.equipped_skills)}/8　★${ind.rarity}`:'勝った個体は残りHPを引き継ぎます'}</small></span></button>`;}).join('');
+  const slots=Array.from({length:3},(_,i)=>{const ind=app.server.vault().find(x=>x.uid===relayView.uids[i]),c=ind&&app.charMap[ind.char_id];return`<button class="relay-slot" data-relay-slot="${i}">${c?art(c,{ind,size:52}):'<span class="relay-empty">＋</span>'}<span><b>${i+1}番手　${c?esc(c.name):'個体を選ぶ'}</b><small>${ind?`${equipmentSummary(ind)}　★${ind.rarity}`:'勝った個体は残りHPを引き継ぎます'}</small></span></button>`;}).join('');
   const enemies=RELAY_ENEMIES.map((x,i)=>{const c=x.ch||app.charMap[x.id];return`<button type="button" class="relay-enemy boss-ability-trigger" data-boss-ability="${c.id}" aria-label="${esc(c.name)}の能力と攻略ヒントを表示">${art(c,{size:82})}<b>${i+1}戦目</b><small>${esc(c.name)}</small><span class="boss-list-hint">能力・攻略を見る</span></button>`;}).join('');
-  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="relayBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>逆獣三段撃破</h2><p>3対3・勝ち抜き戦</p></span></div><h3 class="sec">敵の順番</h3><div class="relay-enemies">${enemies}</div><div class="quest-info"><dl><dt>ルール</dt><dd>勝者は残りHPを引き継ぎ、敗者側だけが次の個体へ交代します。</dd><dt>報酬</dt><dd>クリアごとに1,000コイン</dd></dl></div><h3 class="sec">出撃順</h3><div class="relay-slots">${slots}</div><button class="btn danger wide" id="relayStart" ${relayView.uids.length===3?'':'disabled'}>この順番で挑戦</button></section>`;
-  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$$('[data-boss-ability]').forEach(b=>b.onclick=()=>openBossAbility(b.dataset.bossAbility));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
+  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="relayBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>逆獣三段撃破</h2><p>3対3・勝ち抜き戦</p></span></div><h3 class="sec">敵の順番</h3><div class="relay-enemies">${enemies}</div><div class="quest-info"><dl><dt>ルール</dt><dd>勝者は残りHPを引き継ぎ、敗者側だけが次の個体へ交代します。</dd><dt>報酬</dt><dd>クリアごとに1,000コイン</dd></dl></div><div class="relay-recommend"><div class="relay-recommend-head"><strong>連戦におすすめ</strong><button class="btn primary" id="relayAuto">おすすめで自動編成</button></div><div class="relay-recommend-tags">${RELAY_RECOMMEND_TAGS.map(tag=>`<em>${tag}</em>`).join('')}</div></div><h3 class="sec">出撃順</h3><div class="relay-slots">${slots}</div>${equipmentGuideHtml()}<button class="btn danger wide" id="relayStart" ${relayView.uids.length===3?'':'disabled'}>この順番で挑戦</button></section>`;
+  $('#relayBack').onclick=renderAdventure;$('#relayAuto').onclick=()=>{const ids=relayAutoLineup();if(!ids){toast('自動編成には異なる個体が3体必要です');return;}relayView.uids=ids;draw();toast('おすすめタグに合わせて編成しました');};$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$$('[data-boss-ability]').forEach(b=>b.onclick=()=>openBossAbility(b.dataset.bossAbility));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
  };draw();
 }
-function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}</li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});}
+function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><p class="muted small" style="margin:5px 0 9px">個体を選ぶ前に、相手に合わせて装備も変更できます。</p><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li class="relay-pick-card">${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-relay-equip="${ind.uid}">装備を変更</button></div></li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});body.querySelectorAll('[data-relay-equip]').forEach(b=>b.onclick=()=>openSkillEquip(Number(b.dataset.relayEquip),{back:()=>openRelayPicker(slot,done),done:()=>openRelayPicker(slot,done)}));}
 
 function relayMember(side,index){
  if(side===0){const ind=app.server.vault().find(x=>x.uid===relayView.uids[index]);return ind&&{ind,c:app.charMap[ind.char_id]};}
@@ -2428,7 +2463,7 @@ function prepareTeam(size, quest = false) {
 function teamSelectedHtml() {
   return Array.from({length:teamView.size},(_,i)=>{
     const ind=app.server.vault().find(x=>x.uid===teamView.uids[i]),c=ind&&app.charMap[ind.char_id];
-    return `<div class="team-compose-slot">${c?art(c,{ind,size:44}):'<div class="art" style="width:44px;height:44px"></div>'}<span><strong>${c?esc(c.name):'個体未選択'}</strong>${ind?`<small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small>`:''}</span><button class="team-row-toggle" data-team-row="${i}">${teamView.rows[i]==='back'?'後衛':'前衛'}</button><button class="btn" data-team-pick="${i}" style="grid-column:2/4;padding:3px">個体を選ぶ</button></div>`;
+    return `<div class="team-compose-slot">${c?art(c,{ind,size:44}):'<div class="art" style="width:44px;height:44px"></div>'}<span><strong>${c?esc(c.name):'個体未選択'}</strong>${ind?`<small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small><small>${esc(equipmentSummary(ind))}</small>`:''}</span><button class="team-row-toggle" data-team-row="${i}">${teamView.rows[i]==='back'?'後衛':'前衛'}</button><button class="btn" data-team-pick="${i}" style="grid-column:2/4;padding:3px">個体・装備を選ぶ</button></div>`;
   }).join('');
 }
 
@@ -2441,10 +2476,11 @@ function openTeamOwnPicker(slot,onChange,filter='',combat=newCombatFilter(),view
   view=pickerView(view);
   const all=app.server.vault(),list=sortIndividuals(filterIndividuals(all,combat,filter),view.sort,view.dir);
   const redraw=()=>openTeamOwnPicker(slot,onChange,filter,combat,view);
-  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{sort:view.sort,selected:teamView.uids[slot]===ind.uid,attr:`data-team-own="${ind.uid}"`})}</li>`).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}体目を選ぶ</h2><label class="small">キャラで絞り込み <select id="teamOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li class="relay-pick-card">${individualRowHtml(ind,{sort:view.sort,selected:teamView.uids[slot]===ind.uid,attr:`data-team-own="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-team-equip="${ind.uid}">装備を変更</button></div></li>`).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
   body.querySelector('#teamOwnFilter').onchange=e=>openTeamOwnPicker(slot,onChange,e.target.value,combat,view);
   bindIndividualSort(body,view,redraw);
   bindCombatFilter(body,combat,redraw);
+  body.querySelectorAll('[data-team-equip]').forEach(b=>b.onclick=()=>openSkillEquip(Number(b.dataset.teamEquip),{back:redraw,done:redraw}));
   body.querySelectorAll('[data-team-own]').forEach(b=>b.onclick=()=>{const uid=Number(b.dataset.teamOwn),ind=app.server.vault().find(x=>x.uid===uid),other=teamView.uids.some((x,i)=>i!==slot&&app.server.vault().find(v=>v.uid===x)?.char_id===ind.char_id);if(other){toast('同じキャラを同じチームに入れることはできません');return;}teamView.uids[slot]=uid;teamView.rows[slot]=teamView.rows[slot]||preferredRow(app.charMap[ind.char_id]);closeDialog();if($('#teamOwnCompose')||$('#battleTeamCompose'))onChange();else renderTeamBattle(teamView.quest);});
 }
 
@@ -2458,7 +2494,7 @@ function openTeamQuestDetail(stageId) {
   teamView.stageId=stageId;prepareTeam(st.size,true);practice.open=false;document.body.classList.remove('practice-mode');
   const draw=()=>{$('#teamOwnCompose').innerHTML=teamSelectedHtml();bindTeamComposer($('#teamOwnCompose'),draw);$('#startTeamQuest').disabled=teamView.uids.length!==st.size;};
   const featureText=st.features.map(f=>`<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>')||'なし';
-  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="teamQuestBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>${esc(st.name)}</h2><p>${st.size}対${st.size}・集団戦</p></span></div><div class="quest-info"><dl><dt>物語</dt><dd>${esc(st.story)}</dd><dt>相手チーム</dt><dd>${teamEnemyCards(st)}</dd><dt>舞台の特徴</dt><dd>${featureText}</dd><dt>敵の状態</dt><dd>${esc(st.enemyText||'なし')}</dd><dt>出来事</dt><dd>${esc(st.eventText||'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text||'なし')}</dd><dt>報酬</dt><dd>初回 ${num(TEAM_REWARDS.first)}／2回目以降 ${num(TEAM_REWARDS.repeat)}／目標初達成 +${num(TEAM_REWARDS.goal)}コイン</dd></dl></div><h3 class="sec">挑戦するチーム</h3><div class="team-compose" id="teamOwnCompose"></div><button class="btn danger wide" id="startTeamQuest">挑戦する</button></section>`;
+  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="teamQuestBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>${esc(st.name)}</h2><p>${st.size}対${st.size}・集団戦</p></span></div><div class="quest-info"><dl><dt>物語</dt><dd>${esc(st.story)}</dd><dt>相手チーム</dt><dd>${teamEnemyCards(st)}</dd><dt>舞台の特徴</dt><dd>${featureText}</dd><dt>敵の状態</dt><dd>${esc(st.enemyText||'なし')}</dd><dt>出来事</dt><dd>${esc(st.eventText||'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text||'なし')}</dd><dt>報酬</dt><dd>初回 ${num(TEAM_REWARDS.first)}／2回目以降 ${num(TEAM_REWARDS.repeat)}／目標初達成 +${num(TEAM_REWARDS.goal)}コイン</dd></dl></div><h3 class="sec">挑戦するチーム</h3><div class="team-compose" id="teamOwnCompose"></div>${equipmentGuideHtml()}<button class="btn danger wide" id="startTeamQuest">挑戦する</button></section>`;
   $('#teamQuestBack').onclick=renderAdventure;$('#startTeamQuest').onclick=()=>renderTeamBattle(true);draw();
 }
 
@@ -2537,7 +2573,7 @@ function selectedQuestIndividualHtml() {
   const ind = app.server.vault().find(i => i.uid === questView.ownUid);
   if (!ind) return '<span class="muted">個体が選ばれていません</span>';
   const c = app.charMap[ind.char_id];
-  return `${art(c,{ind,size:48})}<span><strong>${esc(c.name)} ${starsHtml(ind.rarity)}</strong><small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small></span>`;
+  return `${art(c,{ind,size:48})}<span><strong>${esc(c.name)} ${starsHtml(ind.rarity)}</strong><small>パ ${num(ind.power)}　速 ${num(ind.speed)}　賢 ${num(ind.wisdom)}</small><small>${esc(equipmentSummary(ind))}</small></span>`;
 }
 
 function openQuestDetail(stageId) {
@@ -2554,7 +2590,7 @@ function openQuestDetail(stageId) {
     : `${art(enemy,{size:86})}<span><h2>${esc(st.name)}</h2><p>敵：${esc(enemy.name)}</p><p>${enemy.grade}級・覚悟${esc(RESOLVE_LABEL[enemy.resolve])}</p></span>`;
   const featureText = st.features.map(f => `<b>${esc(f)}</b>：${esc(STAGE_FEATURES[f].text)}`).join('<br>') || 'なし';
   const rest = farm ? farmRemaining(stageId) : 0;
-  $('#main').innerHTML = `<section class="quest-detail"><div style="display:flex;gap:6px;margin-bottom:8px"><button class="btn" id="questDetailBack">← クエスト一覧</button><button class="btn" id="questBattleHelp">戦闘について</button></div><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}${stageRecommendHtml(st.boss)}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">選ぶ</button></div><button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
+  $('#main').innerHTML = `<section class="quest-detail"><div style="display:flex;gap:6px;margin-bottom:8px"><button class="btn" id="questDetailBack">← クエスト一覧</button><button class="btn" id="questBattleHelp">戦闘について</button></div><div class="quest-detail-hero">${enemyHtml}</div><div class="quest-info"><dl><dt>舞台の特徴</dt><dd>${featureText}</dd>${farm ? `<dt>敵</dt><dd>${st.grades.join('・')}級からランダム</dd>` : `<dt>敵の状態</dt><dd>${esc(st.enemyText || 'なし')}</dd>`}<dt>出来事</dt><dd>${esc(st.eventText || 'なし')}</dd><dt>挑戦目標</dt><dd>${esc(st.goal?.text || 'なし')}</dd><dt>報酬</dt><dd>${esc(questRewardText(st))}</dd>${farm ? '' : `<dt>攻略のヒント</dt><dd>${esc(STAGE_HINTS[st.boss])}${stageRecommendHtml(st.boss)}</dd>`}</dl></div><h3 class="sec">挑戦する個体</h3><div class="quest-selected" id="questSelected">${selectedQuestIndividualHtml()}<button class="btn" id="chooseQuestOwn">個体・装備を選ぶ</button></div>${equipmentGuideHtml()}<button class="btn danger wide" id="startQuest" ${questView.ownUid && !rest ? '' : 'disabled'}>${rest ? `あと${fmtTime(rest)}` : '挑戦する'}</button></section>`;
   $('#questDetailBack').onclick = renderAdventure;
   $('#questBattleHelp').onclick = openBattleHelp;
   $('#chooseQuestOwn').onclick = () => openQuestPicker();
@@ -2567,10 +2603,11 @@ function openQuestPicker(filter = '', combat = newCombatFilter(), view = null) {
   view=pickerView(view);
   const all = app.server.vault(), list = sortIndividuals(filterIndividuals(all, combat, filter),view.sort,view.dir);
   const redraw = () => openQuestPicker(filter, combat, view);
-  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind => `<li>${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===questView.ownUid,attr:`data-quest-uid="${ind.uid}"`})}</li>`).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
+  const body = openDialog(`<h2 style="margin:0 0 8px">挑戦する個体を選ぶ</h2><label class="small">キャラで絞り込み <select id="questFilter"><option value="">すべて</option>${app.chars.map(c => `<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<div class="practice-pick-list"><ul class="rows">${list.map(ind => `<li class="relay-pick-card">${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===questView.ownUid,attr:`data-quest-uid="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-quest-equip="${ind.uid}">装備を変更</button></div></li>`).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
   $('#questFilter').onchange = e => openQuestPicker(e.target.value, combat, view);
   bindIndividualSort(body,view,redraw);
   bindCombatFilter(body, combat, redraw);
+  body.querySelectorAll('[data-quest-equip]').forEach(b => b.onclick = () => openSkillEquip(Number(b.dataset.questEquip), { back:redraw, done:redraw }));
   body.querySelectorAll('[data-quest-uid]').forEach(b => b.onclick = () => { questView.ownUid=Number(b.dataset.questUid); closeDialog(); openQuestDetail(questView.stageId); });
 }
 
@@ -2685,11 +2722,12 @@ function openPracticePicker(filter = '', combat = newCombatFilter(), view = null
     </label>
     ${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}
     <div class="practice-pick-list"><ul class="rows">${list.map(ind => {
-      return `<li>${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===practice.ownUid,attr:`data-practice-uid="${ind.uid}"`})}</li>`;
+      return `<li class="relay-pick-card">${individualRowHtml(ind,{sort:view.sort,selected:ind.uid===practice.ownUid,attr:`data-practice-uid="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-practice-equip="${ind.uid}">装備を変更</button></div></li>`;
     }).join('') || '<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);
   body.querySelector('#practiceFilter').onchange = e => openPracticePicker(e.target.value, combat, view);
   bindIndividualSort(body,view,redraw);
   bindCombatFilter(body, combat, redraw);
+  body.querySelectorAll('[data-practice-equip]').forEach(b => b.onclick = () => openSkillEquip(Number(b.dataset.practiceEquip), { back:redraw, done:redraw }));
   body.querySelectorAll('[data-practice-uid]').forEach(b => b.onclick = () => {
     practice.ownUid = Number(b.dataset.practiceUid);
     closeDialog();
