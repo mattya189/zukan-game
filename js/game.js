@@ -260,9 +260,12 @@ class GameServer {
       teamCleared: qp.teamCleared || {}, teamGoals: qp.teamGoals || {}
     };
     s.teamLineups = Object.assign({ 2:{ uids:[], rows:[] }, 3:{ uids:[], rows:[] } }, s.teamLineups || {});
+    s.relayLineup = Array.isArray(s.relayLineup) ? s.relayLineup : [];
+    s.relayClears = Number(s.relayClears || 0);
     s.dayOffset = s.dayOffset || 0;
     s.expSeq = s.expSeq || 1;
     for (const ind of s.mine) {
+      ind.equipped_skills = Array.isArray(ind.equipped_skills) ? ind.equipped_skills.filter(id=>SKILL_DEFS[id]) : [];
       if (!ind.titles) ind.titles = titlesOf(ind, this.charMap[ind.char_id]);
       for (const t of ind.titles) this._addTitle(ind.char_id, t);
     }
@@ -762,6 +765,26 @@ class GameServer {
     return ind.locked;
   }
 
+  equipSkills(uid,ids){
+    const ind=this.s.mine.find(x=>x.uid===Number(uid)),ch=ind&&this.charMap[ind.char_id];
+    if(!ind)throw new Error('個体が見つかりません');
+    const unique=[...new Set(ids||[])];
+    if(unique.some(id=>!SKILL_DEFS[id]||!SKILL_DEFS[id].condition(ind,ch)))throw new Error('条件を満たしていないスキルが含まれています');
+    if(skillCost(unique)>SKILL_MAX_COST)throw new Error('スキルコストは合計8までです');
+    ind.equipped_skills=unique;this._save();return unique;
+  }
+
+  relayLineup(){return this.s.relayLineup.slice();}
+  relayBattle(uids){
+    const ids=uids.map(Number);
+    if(ids.length!==3||new Set(ids).size!==3)throw new Error('異なる3体の個体を選んでください');
+    const mine=ids.map(id=>this._questOwn(id)).map(ind=>({ch:this.charMap[ind.char_id],ind}));
+    const foes=RELAY_ENEMIES.map(x=>({ch:x.ch||this.charMap[x.id],ind:{...x.ind}}));
+    const res=runRelayBattle({a:mine,b:foes});this.s.relayLineup=ids;
+    if(res.winner===0){this.s.player.coins+=1000;this.s.relayClears++;this._progress('quest',1);}
+    this._save();return{...res,reward:res.winner===0?1000:0};
+  }
+
   individual(uid, countView = false) {
     const ind = this._all().find(i => i.uid === uid);
     if (!ind) throw new Error('この個体はもう送り出されています');
@@ -905,6 +928,7 @@ const PRACTICE_STAGES = [
 const practice = { open:false, mode:1, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false, expanded:false };
 const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 const teamView = { quest:false, stageId:null, size:2, uids:[], rows:[], enemies:[], token:0, fast:false, skip:false, running:false, expanded:false, result:null };
+const relayView = { uids:[], result:null };
 let adventureView = 'home';
 const tutorialLosses = { quest:0, farm:0 };
 
@@ -2190,11 +2214,13 @@ function openDetail(uid) {
     ${titles.length ? `<div class="title-list" style="margin:8px 0">${titles.map(t => `<em class="tag title">${esc(t.name)}</em><span class="muted small">${esc(t.desc)}</span>`).join('')}</div>` : ''}
     <ul class="stats">${statItems}</ul>
     ${mine ? `<div class="actions">
+      <button class="btn primary" id="dSkills">スキル装備（${skillCost(ind.equipped_skills)}/8）</button>
       <button class="btn" id="dLock">${ind.locked ? 'ロックを外す' : 'ロックする'}</button>
       <button class="btn danger" id="dRelease" ${ind.locked || ind.dispatched ? 'disabled' : ''}>送り出す（+${num(releaseCoins)}）</button>
     </div>` : ''}`);
 
   if (mine) {
+    body.querySelector('#dSkills').onclick=()=>openSkillEquip(uid);
     body.querySelector('#dLock').onclick = () => {
       try { app.server.toggleLock(uid); openDetail(uid); if (app.tab === 'vault') renderVault(); } catch (e) { toast(e.message); }
     };
@@ -2212,6 +2238,12 @@ function openDetail(uid) {
     };
   }
   updateBadges();
+}
+
+function openSkillEquip(uid){
+ const ind=app.server.vault().find(x=>x.uid===Number(uid));if(!ind)return;
+ const ch=app.charMap[ind.char_id],selected=new Set(ind.equipped_skills||[]);
+ const draw=()=>{const used=skillCost([...selected]);const body=openDialog(`<h2 style="margin:0">スキル装備</h2><p class="skill-cost">コスト <b>${used}</b> / ${SKILL_MAX_COST}</p><div class="skill-list">${Object.entries(SKILL_DEFS).map(([id,s])=>{const req=s.requirement(ind,ch),on=selected.has(id),over=!on&&used+s.cost>SKILL_MAX_COST;return`<button class="skill-row ${on?'on':''} ${req.ok?'':'locked'}" data-skill="${id}" ${!req.ok||over?'disabled':''}><span><strong>${esc(s.name)}</strong><small>コスト ${s.cost}</small></span><em>${req.ok?(on?'装備中':'装備可能'):esc(req.text)}</em><p>${esc(s.desc)}</p></button>`;}).join('')}</div><button class="btn primary wide" id="skillSave">この装備で確定</button>`);body.querySelectorAll('[data-skill]').forEach(b=>b.onclick=()=>{const id=b.dataset.skill;selected.has(id)?selected.delete(id):selected.add(id);draw();});body.querySelector('#skillSave').onclick=()=>{try{app.server.equipSkills(uid,[...selected]);closeDialog();toast('スキル装備を保存しました');}catch(e){toast(e.message);}};};draw();
 }
 
 // ---------------------------------------------------------------------
@@ -2308,13 +2340,26 @@ function questSectionsHtml() {
     const rest = farmRemaining(st.id), streak = st.id === 'farm_2' ? `　${progress.arenaStreak}連勝中` : '';
     return `<button class="farm-card" data-quest-stage="${st.id}"><span><strong>${esc(st.difficulty)}　${esc(st.name)}</strong><small>${st.reward}コイン${streak}</small></span><span class="farm-time" data-farm-ready="${st.id}">${rest ? fmtTime(rest) : '挑戦可'}</span></button>`;
   }).join('');
-  return `<div class="quest-heading"><h2>キャラ別の試練</h2><span class="quest-count">${clearedCount} / ${STAGES.length}</span></div><div class="quest-grid">${trials}</div><div class="quest-heading"><h2>周回</h2></div><div class="farm-grid">${farms}</div>`;
+  return `<div class="quest-heading"><h2>特別試験</h2></div><button class="relay-entry" id="openRelay"><strong>逆獣三段撃破</strong><small>3体を順番に出す勝ち抜き戦・固定報酬 1,000コイン</small><span>${app.server.s.relayClears?'クリア済み':'挑戦する'} →</span></button><div class="quest-heading"><h2>キャラ別の試練</h2><span class="quest-count">${clearedCount} / ${STAGES.length}</span></div><div class="quest-grid">${trials}</div><div class="quest-heading"><h2>周回</h2></div><div class="farm-grid">${farms}</div>`;
 }
 
 function bindQuestSections(root = document) {
+  const relay=root.querySelector('#openRelay');if(relay)relay.onclick=openRelayQuest;
   root.querySelectorAll('[data-quest-stage]').forEach(b => b.onclick = () => openQuestDetail(b.dataset.questStage));
   root.querySelectorAll('[data-team-stage]').forEach(b => b.onclick = () => openTeamQuestDetail(b.dataset.teamStage));
 }
+
+function openRelayQuest(){
+ relayView.uids=app.server.relayLineup().filter(uid=>app.server.vault().some(x=>x.uid===uid)).slice(0,3);
+ const draw=()=>{
+  const slots=Array.from({length:3},(_,i)=>{const ind=app.server.vault().find(x=>x.uid===relayView.uids[i]),c=ind&&app.charMap[ind.char_id];return`<button class="relay-slot" data-relay-slot="${i}">${c?art(c,{ind,size:52}):'<span class="relay-empty">＋</span>'}<span><b>${i+1}番手　${c?esc(c.name):'個体を選ぶ'}</b><small>${ind?`スキル ${skillCost(ind.equipped_skills)}/8　★${ind.rarity}`:'勝った個体は残りHPを引き継ぎます'}</small></span></button>`;}).join('');
+  const enemies=RELAY_ENEMIES.map((x,i)=>{const c=x.ch||app.charMap[x.id];return`<div class="relay-enemy">${art(c,{size:82})}<b>${i+1}戦目</b><small>${esc(c.name)}</small></div>`;}).join('');
+  $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="relayBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>逆獣三段撃破</h2><p>3対3・勝ち抜き戦</p></span></div><h3 class="sec">敵の順番</h3><div class="relay-enemies">${enemies}</div><div class="quest-info"><dl><dt>ルール</dt><dd>勝者は残りHPを引き継ぎ、敗者側だけが次の個体へ交代します。</dd><dt>報酬</dt><dd>クリアごとに1,000コイン</dd></dl></div><h3 class="sec">出撃順</h3><div class="relay-slots">${slots}</div><button class="btn danger wide" id="relayStart" ${relayView.uids.length===3?'':'disabled'}>この順番で挑戦</button></section>`;
+  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$('#relayStart').onclick=startRelayQuest;
+ };draw();
+}
+function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}</li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});}
+function startRelayQuest(){try{const res=app.server.relayBattle(relayView.uids);relayView.result=res;renderCoins(true);const logs=res.bouts.map((b,i)=>`<details ${i===res.bouts.length-1?'open':''}><summary>第${i+1}戦　${esc(b.A.name)} vs ${esc(b.B.name)}　― ${b.winner===0?'勝利':'敗北'}</summary><div class="relay-log">${b.log.map(x=>`<p class="${x.kind}">R${x.round} ${esc(x.text)}</p>`).join('')}</div></details>`).join('');$('#main').innerHTML=`<section class="quest-detail"><h2>${res.winner===0?'クリア！':'敗北…'}</h2><p>${res.winner===0?'敵の3体をすべて撃破しました。':'自分の3体が先に倒れました。'}</p><p><b>${res.reward?`+${num(res.reward)}コイン`:'報酬なし'}</b></p><div class="relay-results">${logs}</div><button class="btn primary wide" id="relayAgain">編成へ戻る</button></section>`;$('#relayAgain').onclick=openRelayQuest;}catch(e){toast(e.message);}}
 
 function questRewardText(st) {
   if (isFarmStage(st.id)) {

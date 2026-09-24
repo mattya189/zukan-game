@@ -24,7 +24,6 @@ const BATTLE_RULES = {
   STAT_FLOOR: 35,        // 能力値の差を縮めるための下駄（実効値 ＝ 35 ＋ 0.65 × 能力値）
   STAT_SLOPE: 0.65
 };
-
 const GRADE_INFO = {
   F: { name: '微神級', mult: 0.84 }, E: { name: '小神級', mult: 0.88 }, D: { name: '常神級', mult: 0.92 },
   C: { name: '強神級', mult: 0.96 }, B: { name: '大神級', mult: 1.0 }, A: { name: '超神級', mult: 1.05 },
@@ -107,6 +106,10 @@ function makeFighter(ch, ind, side, stage) {
     dmgDealt: 0, dmgTaken: 0, hitsLanded: 0, forfeit: false, ambUsed: false,
     rec: { stunned: 0, bound: false, boundRounds: 0, debuffs: 0, spdDown: 0, evaded: 0, shieldBroken: 0, minHp: 1, hpAtR5: 1, takenByR8: 0 }   // 挑戦目標の判定用の記録
   };
+  const ids = Array.isArray(i.loadout) && typeof SKILL_DEFS !== 'undefined' ? i.loadout.filter(id=>SKILL_DEFS[id]) : [];
+  f.loadout = { equipped:ids, cooldowns:{} };
+  if (ids.includes('sk_tekkabi')) f.flags.skillGuard = true;
+  if (Number.isFinite(i.battleHp)) f.hp = clamp(i.battleHp, 1, f.maxHp);
   f.mentalRes = RESOLVE_INFO[f.resolve].mental * (kit.mentalRes ?? 1);
   kit.init?.(f);        // ゲージの準備（舞台の「敵の状態」より前に行う）
   return f;
@@ -158,7 +161,7 @@ function runBattle(opts) {
   const ctx = {
     r, stage, A, B, round: 0, log, firstHit: null,
     foe: f => (f === A ? B : A),
-    say(kind, text, extra = {}) { log.push({ round: ctx.round, kind, text, hpA: Math.max(0, Math.round(A.hp)), hpB: Math.max(0, Math.round(B.hp)), ...extra }); },
+    say(kind, text, extra = {}) { ctx.lastKind=kind;ctx.lastSide=extra.side;log.push({ round: ctx.round, kind, text, hpA: Math.max(0, Math.round(A.hp)), hpB: Math.max(0, Math.round(B.hp)), ...extra }); },
     line(f, key) { const arr = f.kit.lines[key]; return arr ? r.pick(arr) : ''; },
     feat: name => hasFeature(ctx, name),
     // 精神攻撃：受ける側の精神耐性・舞台で強さが変わる
@@ -191,6 +194,7 @@ function runBattle(opts) {
     roundStart(ctx);
     // 行動順：素早さ＋ゆらぎ
     const order = [A, B].sort((x, y) => (statOf(y, 'spd') * r.range(0.85, 1.15) + (y.kit.initiative?.(ctx, y) || 0)) - (statOf(x, 'spd') * r.range(0.85, 1.15) + (x.kit.initiative?.(ctx, x) || 0)));
+    ctx.roundFirst = order[0];
     for (const f of order) {
       if (A.hp <= 0 || B.hp <= 0 || A.forfeit || B.forfeit) break;
       act(ctx, f);
@@ -219,6 +223,14 @@ function roundStart(ctx) {
 function roundEnd(ctx) {
   for (const f of [ctx.A, ctx.B]) {
     f.kit.onRoundEnd?.(ctx, f, ctx.foe(f));
+    if(f.loadout.equipped.includes('sk_dojinu')){
+      const prev=f.flags.skillStatus||{stun:0,bind:0,debuffs:0},debuffs=f.mods.filter(m=>m.mul<1&&!m.permanent&&!String(m.key||'').startsWith('stage_'));
+      if((f.stun>prev.stun||f.bind>prev.bind||debuffs.length>prev.debuffs)&&ctx.r.chance(.5)){
+        if(f.stun>prev.stun)f.stun=Math.max(0,f.stun-1);else if(f.bind>prev.bind)f.bind=Math.max(0,f.bind-1);else{const m=debuffs[debuffs.length-1];if(m)m.turns=Math.max(0,m.turns-1);}
+        ctx.say('skill',`${f.name}の「動じぬ心」！ 状態異常を1ターン短縮した`,{side:f.side,skill:'動じぬ心'});
+      }
+      f.flags.skillStatus={stun:f.stun,bind:f.bind,debuffs:debuffs.length};
+    }
     for (const m of f.mods) m.turns--;
     const expired = f.mods.filter(m => m.turns <= 0 && m.onExpire);
     f.mods = f.mods.filter(m => m.turns > 0);
@@ -227,10 +239,13 @@ function roundEnd(ctx) {
     f.rec.minHp = Math.min(f.rec.minHp, Math.max(0, f.hp) / f.maxHp);
     if (ctx.round === 5) f.rec.hpAtR5 = Math.max(0, f.hp) / f.maxHp;
     if (ctx.round === 8) f.rec.takenByR8 = f.dmgTaken / f.maxHp;
+    for (const id of f.loadout.equipped) f.loadout.cooldowns[id] = Math.max(0,(f.loadout.cooldowns[id]||0)-1);
+    if (f.flags.skillVulnerable > 0) f.flags.skillVulnerable--;
   }
 }
 
 function act(ctx, f, extra = false) {
+  ctx.skillSource = null;
   const foe = ctx.foe(f);
   if (f.stun > 0) {
     f.stun--; f.rec.stunned++;
@@ -245,20 +260,38 @@ function act(ctx, f, extra = false) {
     ctx.say('talk', `${f.name}「${ctx.line(f, 'low')}」`, { side: f.side, note: '野望力で攻撃が上がった' });
   }
   const action = f.kit.chooseAction?.(ctx, f, foe, extra) || { name: ctx.line(f, 'attack') };
+  const actionMultBeforeLoadout = action.mult ?? 1;
+  if (!extra && ctx.round <= 5 && ctx.roundFirst === f) f.meters.skillFirst=(f.meters.skillFirst||0)+1;
+  applyLoadoutBonus(ctx,f,foe,action);
   if (action.skip) { if (action.text) ctx.say('info', action.text, { side: f.side }); return; }
-  if (action.special) { action.special(ctx, f, foe); return; }
+  if (action.special) {
+    f.flags.loadoutActionMul=(action.mult??1)/actionMultBeforeLoadout;
+    f.flags.loadoutSure=!!action.sure;
+    action.special(ctx, f, foe);delete f.flags.loadoutActionMul;delete f.flags.loadoutSure;return;
+  }
   doAttack(ctx, f, foe, action);
+}
+
+function applyLoadoutBonus(ctx,f,foe,action){
+  if(typeof SKILL_DEFS==='undefined')return;
+  f.loadout.equipped.slice().sort((a,b)=>SKILL_DEFS[b].cost-SKILL_DEFS[a].cost).forEach(id=>{
+    const s=SKILL_DEFS[id];
+    if((f.loadout.cooldowns[id]||0)>0||!s.trigger(ctx,f,foe))return;
+    s.apply(ctx,f,foe,action);f.loadout.cooldowns[id]=s.cooldown||0;
+    ctx.say('skill',`${f.name}の装備スキル「${s.name}」が発動！`,{side:f.side,skill:s.name});
+  });
 }
 
 // 攻撃：{ name, mult, hits, sure, pierce, big, label, after }
 function doAttack(ctx, f, foe, opt = {}) {
   const { r } = ctx;
+  if(f.flags.loadoutSure)opt={...opt,sure:true};
   const hits = opt.hits || 1;
   let total = 0, landed = 0;
   for (let h = 0; h < hits; h++) {
     if (foe.hp <= 0) break;
     // 命中
-    let acc = 0.9 + (statOf(f, 'wis') - statOf(foe, 'spd')) * 0.0015;
+    let acc = 0.9 + (statOf(f, 'wis') - statOf(foe, 'spd')) * 0.0015 + (opt.accuracyBonus||0);
     let eva = clamp(0.05 + (statOf(foe, 'spd') - statOf(f, 'spd')) * 0.0025, 0, 0.3);
     if (f.kit.accuracy) acc += f.kit.accuracy(ctx, f, foe) || 0;
     if (foe.kit.evasion) eva += foe.kit.evasion(ctx, foe, f, opt) || 0;
@@ -305,14 +338,19 @@ function doAttack(ctx, f, foe, opt = {}) {
 
 function applyDamage(ctx, src, tgt, amount, info = {}) {
   let dmg = amount;
+  if(src?.flags.loadoutActionMul)dmg*=src.flags.loadoutActionMul;
   if (ctx.beforeDamage) dmg = ctx.beforeDamage(src, tgt, dmg, info);   // 集団戦：味方をかばう効果など
   if (tgt.kit.damageIn) dmg = tgt.kit.damageIn(ctx, tgt, src, dmg, info) ?? dmg;
+  if(tgt.flags.skillGuard)dmg*=.85;
+  if(tgt.flags.skillVulnerable>0)dmg*=1.25;
+  if(tgt.loadout.equipped.includes('sk_kamihitoe')&&!(tgt.loadout.cooldowns.sk_kamihitoe>0)&&ctx.r.chance(.2)){dmg=0;tgt.loadout.cooldowns.sk_kamihitoe=3;ctx.say('skill',`${tgt.name}の「紙一重」！ ダメージをかわした`,{side:tgt.side,skill:'紙一重'});}
   if (tgt.shield > 0 && !info.ignoreShield) {
     const absorbed = Math.min(tgt.shield, dmg);
     tgt.shield -= absorbed; dmg -= absorbed;
     if (tgt.shield <= 0 && dmg > 0) tgt.rec.shieldBroken++;
   }
   dmg = Math.max(0, dmg);
+  if(dmg>=tgt.hp&&tgt.loadout.equipped.includes('sk_shigojou')&&!tgt.flags.sk_shigojou){dmg=Math.max(0,tgt.hp-1);tgt.flags.sk_shigojou=true;ctx.say('skill',`${tgt.name}の「執念」！ HP1で耐えた`,{side:tgt.side,skill:'執念'});}
   tgt.hp -= dmg; tgt.dmgTaken += dmg;
   if (src) src.dmgDealt += dmg;
   tgt.kit.onDamaged?.(ctx, tgt, src, dmg, info);
@@ -353,7 +391,7 @@ function finish(ctx) {
 //   文章の技を、戦いの中の動きに置き換えたもの。
 //   uses … 舞台の特徴が参照する性質（rock=岩を使う, sound=音で戦う, wind=風・帆を使う, irregular=動きが読めない）
 // =====================================================================
-const skill = (ctx, f, name, text, extra = {}) => ctx.say('skill', `${f.name}の「${name}」！ ${text}`, { side: f.side, skill: name, ...extra });
+const skill = (ctx, f, name, text, extra = {}) => { ctx.skillSource=f;ctx.say('skill', `${f.name}の「${name}」！ ${text}`, { side: f.side, skill: name, ...extra }); };
 const gradeGap = (a, b) => GRADE_ORDER.indexOf(b.grade) - GRADE_ORDER.indexOf(a.grade);   // 相手が何段上か
 
 const FIGHTER_KITS = {
@@ -1179,3 +1217,8 @@ const KIT_TUNE = {
  'chr_012': 0.996,
  'chr_013': 0.917
 };
+
+// 試験クエスト専用の敵。既存13体の kit は変更しない。
+FIGHTER_KITS.chr_rag={short:'ラグ＝ヴァルガ',uses:[],lines:{intro:['怒りは、よく狙える'],attack:['導怒砲を撃ち込んだ'],low:['照準は外さない'],win:['分析完了'],lose:['予測外……']},init(f){f.meters.analysis=0;},onRound(ctx,f){if(ctx.round%5===0&&ctx.round<=25)f.meters.analysis++;},accuracy(ctx,f){return(f.meters.analysis||0)*.04;},evasion(ctx,f){return(f.meters.analysis||0)*.03;},onHit(ctx,f,foe){foe.meters.ragAnger=Math.min(6,(foe.meters.ragAnger||0)+1);},damageOut(ctx,f,foe,dmg){return dmg*(1+(foe.meters.ragAnger||0)*.03);},onRoundEnd(ctx,f,foe){if(ctx.round%10===0)foe.meters.ragAnger=Math.max(0,(foe.meters.ragAnger||0)-1);},chooseAction(ctx,f){return{name:ctx.line(f,'attack'),mult:.85};}};
+FIGHTER_KITS.chr_grad={short:'グラド＝ヴァルガ',uses:[],lines:{intro:['城塞は、退かない'],attack:['城砲を放った'],low:['敵意を受け止める'],win:['逆獣の城は健在だ'],lose:['城壁、崩壊……']},init(f){f.meters.hostility=0;},evasion(){return-.05;},statMul(f,stat){if(stat!=='atk')return 1;const g=f.meters.hostility||0;return g>=100?1.65:g>=80?1.4:g>=50?1.2:1;},onDamaged(ctx,f,src,dmg,info){f.meters.hostility=Math.min(100,(f.meters.hostility||0)+dmg/f.maxHp*100);const special=info.big||(src&&ctx.skillSource===src);if(special&&dmg>0){const heal=dmg*.25;f.hp=Math.min(f.maxHp,f.hp+heal);skill(ctx,f,'欲圧装甲',`強い一撃を吸収し、${Math.round(heal)}回復した`);}if(src&&src.tags.has('近接')&&ctx.r.chance(.2)&&f.hp>0){ctx.attack(f,src,{name:'震圧踏砕',mult:1});addMod(src,{key:'grad_shock',stat:'wis',mul:.9,turns:1});}},chooseAction(ctx,f){if(ctx.round>=6&&(f.meters.hostility||0)>=70&&!f.flags.ultimate){f.flags.ultimate=true;return{name:'最大攻撃・逆界城砲撃',mult:4,sure:true,big:true,after(){addMod(f,{key:'grad_gap_atk',stat:'atk',mul:.7,turns:3});addMod(f,{key:'grad_gap_def',stat:'def',mul:.8,turns:3});}};}return{name:ctx.line(f,'attack')};}};
+KIT_TUNE.chr_rag=1;KIT_TUNE.chr_grad=1;
