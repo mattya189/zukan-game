@@ -928,7 +928,7 @@ const PRACTICE_STAGES = [
 const practice = { open:false, mode:1, ownUid:null, enemyId:'chr_002', enemyInd:null, stageIndex:0, features:[], token:0, fast:false, skip:false, running:false, expanded:false };
 const questView = { stageId:null, ownUid:null, enemyId:null, result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 const teamView = { quest:false, stageId:null, size:2, uids:[], rows:[], enemies:[], token:0, fast:false, skip:false, running:false, expanded:false, result:null };
-const relayView = { uids:[], result:null, token:0, fast:false, skip:false, running:false, expanded:false, paused:false };
+const relayView = { uids:[], result:null, token:0, fast:false, skip:false, running:false, expanded:false };
 let adventureView = 'home';
 const tutorialLosses = { quest:0, farm:0 };
 
@@ -2353,9 +2353,9 @@ function openRelayQuest(){
  relayView.uids=app.server.relayLineup().filter(uid=>app.server.vault().some(x=>x.uid===uid)).slice(0,3);
  const draw=()=>{
   const slots=Array.from({length:3},(_,i)=>{const ind=app.server.vault().find(x=>x.uid===relayView.uids[i]),c=ind&&app.charMap[ind.char_id];return`<button class="relay-slot" data-relay-slot="${i}">${c?art(c,{ind,size:52}):'<span class="relay-empty">＋</span>'}<span><b>${i+1}番手　${c?esc(c.name):'個体を選ぶ'}</b><small>${ind?`スキル ${skillCost(ind.equipped_skills)}/8　★${ind.rarity}`:'勝った個体は残りHPを引き継ぎます'}</small></span></button>`;}).join('');
-  const enemies=RELAY_ENEMIES.map((x,i)=>{const c=x.ch||app.charMap[x.id];return`<div class="relay-enemy">${art(c,{size:82})}<b>${i+1}戦目</b><small>${esc(c.name)}</small></div>`;}).join('');
+  const enemies=RELAY_ENEMIES.map((x,i)=>{const c=x.ch||app.charMap[x.id];return`<button type="button" class="relay-enemy boss-ability-trigger" data-boss-ability="${c.id}" aria-label="${esc(c.name)}の能力と攻略ヒントを表示">${art(c,{size:82})}<b>${i+1}戦目</b><small>${esc(c.name)}</small><span class="boss-list-hint">能力・攻略を見る</span></button>`;}).join('');
   $('#main').innerHTML=`<section class="quest-detail"><button class="btn" id="relayBack">← クエスト一覧</button><div class="quest-detail-hero"><span><h2>逆獣三段撃破</h2><p>3対3・勝ち抜き戦</p></span></div><h3 class="sec">敵の順番</h3><div class="relay-enemies">${enemies}</div><div class="quest-info"><dl><dt>ルール</dt><dd>勝者は残りHPを引き継ぎ、敗者側だけが次の個体へ交代します。</dd><dt>報酬</dt><dd>クリアごとに1,000コイン</dd></dl></div><h3 class="sec">出撃順</h3><div class="relay-slots">${slots}</div><button class="btn danger wide" id="relayStart" ${relayView.uids.length===3?'':'disabled'}>この順番で挑戦</button></section>`;
-  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
+  $('#relayBack').onclick=renderAdventure;$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$$('[data-boss-ability]').forEach(b=>b.onclick=()=>openBossAbility(b.dataset.bossAbility));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
  };draw();
 }
 function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li>${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}</li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});}
@@ -2367,15 +2367,12 @@ function relayMember(side,index){
 function relayCorner(side,index,hp=null,maxHp=null){
  const el=$(`#relayCorner${side}`),member=relayMember(side,index);if(!el||!member)return;
  const {ind,c}=member,grade=ZUKAN_GRADE_INFO[c.grade]||[c.grade,'#8E99A8'],pct=hp==null||!maxHp?100:Math.max(0,hp)/maxHp*100,src=slotSrc(c,'base');
- const portrait=src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,ind,false,1,1);
- el.style.setProperty('--c',grade[1]);el.innerHTML=`<div class="relay-order">${side===0?'味方':'敵'} ${index+1}/3</div>${side===1?`<button type="button" class="practice-art boss-ability-trigger" data-boss-ability="${c.id}" aria-label="${esc(c.name)}の能力と攻略ヒントを表示">${portrait}<span class="boss-tap-hint">能力を見る</span></button>`:`<div class="practice-art">${portrait}</div>`}<div class="practice-name">${esc(c.name)}</div><div class="practice-grade"><b>${c.grade}</b>${esc(grade[0])}・覚悟${esc(RESOLVE_LABEL[c.resolve])}</div><div class="practice-ind"><span>パ<b>${num(ind.power)}</b></span><span>速<b>${num(ind.speed)}</b></span><span>賢<b>${num(ind.wisdom)}</b></span></div><div class="practice-hpbar"><i class="${pct<=30?'low':''}" style="width:${pct}%"></i></div><div class="practice-hpnum">${hp==null?'待機中':`HP ${Math.max(0,Math.round(hp))} / ${Math.round(maxHp)}`}</div>`;
- const ability=el.querySelector('[data-boss-ability]');if(ability)ability.onclick=()=>openBossAbility(ability.dataset.bossAbility);
+ el.style.setProperty('--c',grade[1]);el.innerHTML=`<div class="relay-order">${side===0?'味方':'敵'} ${index+1}/3</div><div class="practice-art">${src?`<img src="${esc(src)}" alt="${esc(c.name)}">`:placeholderSvg(c,ind,false,1,1)}</div><div class="practice-name">${esc(c.name)}</div><div class="practice-grade"><b>${c.grade}</b>${esc(grade[0])}・覚悟${esc(RESOLVE_LABEL[c.resolve])}</div><div class="practice-ind"><span>パ<b>${num(ind.power)}</b></span><span>速<b>${num(ind.speed)}</b></span><span>賢<b>${num(ind.wisdom)}</b></span></div><div class="practice-hpbar"><i class="${pct<=30?'low':''}" style="width:${pct}%"></i></div><div class="practice-hpnum">${hp==null?'待機中':`HP ${Math.max(0,Math.round(hp))} / ${Math.round(maxHp)}`}</div>`;
 }
 function openBossAbility(id){
  const data=typeof BOSS_ABILITIES!=='undefined'&&BOSS_ABILITIES[id];if(!data)return;
- relayView.paused=true;
- const body=openDialog(`<div class="boss-help-head"><span class="boss-help-badge">敵の仕様</span><h2>${esc(data.displayName)}</h2><p>${esc(data.subtitle)}</p></div><section class="boss-help-section"><h3>持っている効果</h3><ul class="boss-ability-list">${data.abilities.map(x=>`<li><strong>${esc(x.name)}</strong><span>${esc(x.desc)}</span></li>`).join('')}</ul></section><section class="boss-help-section hint"><h3>攻略のヒント</h3><ul>${data.hints.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section><button class="btn primary wide" id="bossHelpClose">戦闘に戻る</button>`);
- const d=$('#dlg'),resume=()=>{relayView.paused=false;};d.addEventListener('close',resume,{once:true});body.querySelector('#bossHelpClose').onclick=closeDialog;
+ const body=openDialog(`<div class="boss-help-head"><span class="boss-help-badge">敵の仕様</span><h2>${esc(data.displayName)}</h2><p>${esc(data.subtitle)}</p></div><section class="boss-help-section"><h3>持っている効果</h3><ul class="boss-ability-list">${data.abilities.map(x=>`<li><strong>${esc(x.name)}</strong><span>${esc(x.desc)}</span></li>`).join('')}</ul></section><section class="boss-help-section hint"><h3>攻略のヒント</h3><ul>${data.hints.map(x=>`<li>${esc(x)}</li>`).join('')}</ul></section><button class="btn primary wide" id="bossHelpClose">出撃画面に戻る</button>`);
+ body.querySelector('#bossHelpClose').onclick=closeDialog;
 }
 function renderRelayBattle(){
  if(relayView.running){relayView.token++;relayView.running=false;}practice.open=true;document.body.classList.add('practice-mode');
@@ -2387,8 +2384,7 @@ function renderRelayBattle(){
 async function startRelayFight(){
  const token=++relayView.token,feed=$('#relayFeed'),button=$('#relayGo');relayView.skip=false;relayView.running=true;relayView.expanded=true;$('#relayBattle').classList.add('log-wide');$('#relayViewToggle').textContent='絵を大きく';feed.innerHTML='';button.textContent='やり直す';button.classList.add('running');
  let res;try{res=app.server.relayBattle(relayView.uids);}catch(e){relayView.running=false;button.classList.remove('running');button.textContent='戦わせる';toast(e.message);return;}
- relayView.result=res;renderCoins(true);let ai=0,bi=0,carryA=null,carryB=null;
- const wait=async ms=>{let left=relayView.skip?0:relayView.fast?ms/4:ms;while(left>0||relayView.paused){while(relayView.paused)await new Promise(r=>setTimeout(r,80));if(left<=0)break;const step=Math.min(80,left);await new Promise(r=>setTimeout(r,step));left-=step;}};
+ relayView.result=res;renderCoins(true);let ai=0,bi=0,carryA=null,carryB=null;const wait=ms=>new Promise(r=>setTimeout(r,relayView.skip?0:relayView.fast?ms/4:ms));
  for(let n=0;n<res.bouts.length;n++){
   const bout=res.bouts[n],names=[bout.A.name,bout.B.name];if(token!==relayView.token||!practice.open)return;
   $('#relayBoutLabel').textContent=`第${n+1}戦　味方${ai+1}番手 vs 敵${bi+1}番手`;
