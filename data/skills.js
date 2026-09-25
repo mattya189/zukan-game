@@ -1,4 +1,4 @@
-// 個体値から解放される装備。戦闘へは loadout として渡し、自動で発動する。
+// 個体値から解放される連戦専用の装備。連戦へ loadout として渡し、自動で発動する。
 const SKILL_MAX_COST = 8;
 const SKILL_CALM_NATURES = ['れいせい','しんちょう','ひかえめ','まじめ','がんこ'];
 const SKILL_WEAK_TAGS = ['大型','飛行','領域','精神干渉','長期戦'];
