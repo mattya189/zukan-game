@@ -1732,9 +1732,15 @@ function openZukanPage(charId) {
 const VAULT_SORTS = {
   new: ['新しい順', (a, b) => b.uid - a.uid],
   rarity: ['レアリティ', (a, b) => b.rarity - a.rarity || b.uid - a.uid],
-  power: ['パワー', (a, b) => b.power - a.power],
-  speed: ['すばやさ', (a, b) => b.speed - a.speed],
-  wisdom: ['かしこさ', (a, b) => b.wisdom - a.wisdom],
+  power: ['個体値：パワー', (a, b) => b.power - a.power],
+  speed: ['個体値：すばやさ', (a, b) => b.speed - a.speed],
+  wisdom: ['個体値：かしこさ', (a, b) => b.wisdom - a.wisdom],
+  base_atk: ['能力値：攻撃力', (a, b) => (app.charMap[b.char_id]?.stats.atk||0)-(app.charMap[a.char_id]?.stats.atk||0)],
+  base_def: ['能力値：防御力', (a, b) => (app.charMap[b.char_id]?.stats.def||0)-(app.charMap[a.char_id]?.stats.def||0)],
+  base_wis: ['能力値：賢さ', (a, b) => (app.charMap[b.char_id]?.stats.wis||0)-(app.charMap[a.char_id]?.stats.wis||0)],
+  base_spd: ['能力値：素早さ', (a, b) => (app.charMap[b.char_id]?.stats.spd||0)-(app.charMap[a.char_id]?.stats.spd||0)],
+  base_sta: ['能力値：持久力', (a, b) => (app.charMap[b.char_id]?.stats.sta||0)-(app.charMap[a.char_id]?.stats.sta||0)],
+  base_amb: ['能力値：野望力', (a, b) => (app.charMap[b.char_id]?.stats.amb||0)-(app.charMap[a.char_id]?.stats.amb||0)],
   weight: ['体重', (a, b) => b.weight - a.weight],
   height: ['身長', (a, b) => b.height - a.height],
   luck: ['うんのよさ', (a, b) => b.luck - a.luck],
@@ -1754,6 +1760,8 @@ function sortValue(ind, key) {
   if (key === 'new') return [`#${pad6(ind.serial)}`, '通し番号'];
   if (key === 'rarity') return [`★${ind.rarity}`, 'レアリティ'];
   if (key === 'titles') return [`${(ind.titles || []).length}`, '称号'];
+  const battleStats={base_atk:['攻撃力','atk'],base_def:['防御力','def'],base_wis:['賢さ','wis'],base_spd:['素早さ','spd'],base_sta:['持久力','sta'],base_amb:['野望力','amb']};
+  if(battleStats[key]){const [label,stat]=battleStats[key],value=app.charMap[ind.char_id]?.stats[stat]||0;return[num(value),label];}
   const labels = { power:'パワー', speed:'すばやさ', wisdom:'かしこさ', weight:'体重', height:'身長', luck:'うん', shine:'かがやき', appetite:'食欲', nature_strength:'性格', total_score:'総合値' };
   const units = { weight:'kg', height:'cm' };
   const value = key === 'weight' || key === 'height' ? Number(ind[key]).toLocaleString('ja-JP', { maximumFractionDigits:1 }) : num(ind[key]);
@@ -2393,7 +2401,7 @@ function openRelayQuest(){
   $('#relayBack').onclick=renderAdventure;$('#relayAuto').onclick=()=>{const ids=relayAutoLineup();if(!ids){toast('自動編成には異なる個体が3体必要です');return;}relayView.uids=ids;draw();toast('おすすめタグに合わせて編成しました');};$$('[data-relay-slot]').forEach(b=>b.onclick=()=>openRelayPicker(Number(b.dataset.relaySlot),draw));$$('[data-boss-ability]').forEach(b=>b.onclick=()=>openBossAbility(b.dataset.bossAbility));$('#relayStart').onclick=()=>{renderRelayBattle();startRelayFight();};
  };draw();
 }
-function openRelayPicker(slot,done){const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),list=app.server.vault().filter(x=>!used.has(x.uid));const body=openDialog(`<h2 style="margin:0">${slot+1}番手を選ぶ</h2><p class="muted small" style="margin:5px 0 9px">個体を選ぶ前に、相手に合わせて装備も変更できます。</p><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li class="relay-pick-card">${individualRowHtml(ind,{attr:`data-relay-pick="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-relay-equip="${ind.uid}">装備を変更</button></div></li>`).join('')}</ul></div>`);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});body.querySelectorAll('[data-relay-equip]').forEach(b=>b.onclick=()=>openSkillEquip(Number(b.dataset.relayEquip),{back:()=>openRelayPicker(slot,done),done:()=>openRelayPicker(slot,done)}));}
+function openRelayPicker(slot,done,filter='',combat=newCombatFilter(),view=null){view=pickerView(view);const used=new Set(relayView.uids.filter((x,i)=>i!==slot)),all=app.server.vault().filter(x=>!used.has(x.uid)),list=sortIndividuals(filterIndividuals(all,combat,filter),view.sort,view.dir),redraw=()=>openRelayPicker(slot,done,filter,combat,view);const body=openDialog(`<h2 style="margin:0 0 8px">${slot+1}番手を選ぶ</h2><label class="small">キャラで絞り込み <select id="relayOwnFilter"><option value="">すべて</option>${app.chars.map(c=>`<option value="${c.id}" ${c.id===filter?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>${individualSortHtml(view)}${combatFilterHtml(combat,list.length,all.length)}<p class="muted small" style="margin:5px 0 9px">個体を選ぶ前に、相手に合わせて装備も変更できます。</p><div class="practice-pick-list"><ul class="rows">${list.map(ind=>`<li class="relay-pick-card">${individualRowHtml(ind,{sort:view.sort,attr:`data-relay-pick="${ind.uid}"`})}<div class="relay-pick-equip"><span>${esc(equipmentSummary(ind))}</span><button type="button" class="btn" data-relay-equip="${ind.uid}">装備を変更</button></div></li>`).join('')||'<li class="muted small combat-filter-empty">条件に合う個体がいません。<br>条件を外してみてください。</li>'}</ul></div>`);body.querySelector('#relayOwnFilter').onchange=e=>openRelayPicker(slot,done,e.target.value,combat,view);bindIndividualSort(body,view,redraw);bindCombatFilter(body,combat,redraw);body.querySelectorAll('[data-relay-pick]').forEach(b=>b.onclick=()=>{relayView.uids[slot]=Number(b.dataset.relayPick);closeDialog();done();});body.querySelectorAll('[data-relay-equip]').forEach(b=>b.onclick=()=>openSkillEquip(Number(b.dataset.relayEquip),{back:redraw,done:redraw}));}
 
 function relayMember(side,index){
  if(side===0){const ind=app.server.vault().find(x=>x.uid===relayView.uids[index]);return ind&&{ind,c:app.charMap[ind.char_id]};}
