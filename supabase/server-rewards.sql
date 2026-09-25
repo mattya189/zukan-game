@@ -416,7 +416,7 @@ declare item jsonb; item_count integer; pull_cost bigint; assigned_serial bigint
 begin
   if jsonb_typeof(p_entries)<>'array' then raise exception '抽選結果が正しくありません'; end if;
   item_count:=jsonb_array_length(p_entries); if item_count not in(1,10) then raise exception '引ける回数は1回か10回です'; end if;
-  pull_cost:=case p_gacha_id when 'normal_1' then case item_count when 1 then 100 else 1000 end when 'limited_1' then case item_count when 1 then 300 else 3000 end else null end;
+  pull_cost:=case p_gacha_id when 'normal_1' then case item_count when 1 then 100 else 1000 end when 'limited_1' then case item_count when 1 then 300 else 3000 end when 'limited_2' then case item_count when 1 then 300 else 3000 end else null end;
   if pull_cost is null then raise exception '開催中のガチャを確認できませんでした'; end if;
   clean_name:=left(coalesce(nullif(btrim(p_player_name),''),'あなた'),12);
   insert into private.player_wallets(user_id) values(p_user_id) on conflict(user_id) do nothing; select * into wallet from private.player_wallets where user_id=p_user_id for update;

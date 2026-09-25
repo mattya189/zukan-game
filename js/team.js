@@ -227,6 +227,7 @@ function runTeamBattle(opts) {
 
   const ctx = {
     r, stage, log, round: 0, teams, firstHit: null, team: true,
+    partySize: size, teamSize: size,
     A: teams[0][0], B: teams[1][0],
     allies: f => alive(f.side).filter(x => x !== f),
     enemies: f => alive(1 - f.side),

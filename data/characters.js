@@ -37,3 +37,24 @@ CHARACTERS.push(
     speed_bias:600, wisdom_bias:800, luck_bias:700, appetite_bias:900, likely_natures:['しっかりもの','しんちょう','くいしんぼう']
   }
 );
+
+CHARACTERS.push(
+  {
+    id:'chr_014', name:'マッチ＝オモルディア', title:'抱込の化身', category:'マッチ神', kind:'欲望種', grade:'C', resolve:'high',
+    tags:['近接','大型','拘束','長期戦','精神干渉'], stats:{atk:45,def:88,wis:65,spd:22,sta:120,amb:8}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:355, shape:0, base_weight:150, base_height:250,
+    speed_bias:200, wisdom_bias:650, luck_bias:300, appetite_bias:250, likely_natures:['ひかえめ','しんちょう','がんこ']
+  },
+  {
+    id:'chr_015', name:'マッチ＝スクアリオン', title:'集団行動の化身', category:'マッチ神', kind:'欲望種', grade:'B', resolve:'mid',
+    tags:['近接','大型','領域','精神干渉'], stats:{atk:70,def:68,wis:85,spd:100,sta:75,amb:20}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:195, shape:0, base_weight:1500, base_height:480,
+    speed_bias:800, wisdom_bias:700, luck_bias:400, appetite_bias:750, likely_natures:['すなお','ようき','しっかりもの']
+  },
+  {
+    id:'chr_016', name:'マッチ＝クロノロン', title:'独時の化身', category:'マッチ神', kind:'概念種', grade:'B', resolve:'mid',
+    tags:['遠距離','音','拘束','領域','大型'], stats:{atk:62,def:72,wis:96,spd:118,sta:40,amb:58}, story:true, combat:true,
+    art:{base:1,r4:0,r5:0}, hue:40, shape:0, base_weight:550, base_height:420,
+    speed_bias:850, wisdom_bias:800, luck_bias:450, appetite_bias:150, likely_natures:['マイペース','しんちょう','れいせい']
+  }
+);

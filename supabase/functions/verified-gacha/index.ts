@@ -25,10 +25,14 @@ const CHARACTERS: Character[] = [
   ,{ id:'chr_011', base_weight:65, base_height:210, speed_bias:800, wisdom_bias:500, luck_bias:450, appetite_bias:400, likely_natures:['せっかち','やんちゃ','おしゃべり'] }
   ,{ id:'chr_012', base_weight:400, base_height:300, speed_bias:700, wisdom_bias:950, luck_bias:500, appetite_bias:200, likely_natures:['れいせい','しんちょう','ひかえめ'] }
   ,{ id:'chr_013', base_weight:120, base_height:200, speed_bias:600, wisdom_bias:800, luck_bias:700, appetite_bias:900, likely_natures:['しっかりもの','しんちょう','くいしんぼう'] }
+  ,{ id:'chr_014', base_weight:150, base_height:250, speed_bias:200, wisdom_bias:650, luck_bias:300, appetite_bias:250, likely_natures:['ひかえめ','しんちょう','がんこ'] }
+  ,{ id:'chr_015', base_weight:1500, base_height:480, speed_bias:800, wisdom_bias:700, luck_bias:400, appetite_bias:750, likely_natures:['すなお','ようき','しっかりもの'] }
+  ,{ id:'chr_016', base_weight:550, base_height:420, speed_bias:850, wisdom_bias:800, luck_bias:450, appetite_bias:150, likely_natures:['マイペース','しんちょう','れいせい'] }
 ];
 const GACHAS = {
   normal_1: { price:100, price10:1000, chars:['chr_001','chr_002','chr_003','chr_004','chr_005','chr_006','chr_007','chr_008','chr_009','chr_010'], minRarity:3 },
-  limited_1: { price:300, price10:3000, chars:['chr_013','chr_012','chr_011','chr_004','chr_001'], minRarity:4 }
+  limited_1: { price:300, price10:3000, chars:['chr_013','chr_012','chr_011','chr_004','chr_001'], minRarity:4 },
+  limited_2: { price:300, price10:3000, chars:['chr_014','chr_015','chr_016','chr_002','chr_008'], minRarity:4 }
 } as const;
 const NATURES = ['さみしがり','のんき','負けず嫌い','おっとり','せっかち','きまぐれ','まじめ','ひかえめ','ようき','ゆうかん','しんちょう','れいせい','てれや','がんこ','すなお','いじっぱり','おくびょう','むじゃき','やんちゃ','くいしんぼう','ねぼすけ','おしゃべり','ロマンチスト','しっかりもの','マイペース'];
 const RATES: [number, number][] = [[5,1.5],[4,5.5],[3,15],[2,28],[1,50]];

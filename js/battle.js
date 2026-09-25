@@ -1194,6 +1194,249 @@ const FIGHTER_KITS = {
       return dmg;
     },
     chooseAction(ctx, f, foe) { return { name: ctx.line(f, 'attack'), mult: 0.9 }; }
+  },
+
+
+  // ------------------------------------------------------------------ 014
+  chr_014: {
+    short: 'オモルディア',
+    uses: [],
+    mentalRes: 1.3,   // 他人の苦しみまで引き受けてしまうため、精神攻撃には人一倍弱い
+    lines: {
+      intro: ['大丈夫、任せてくれ', '……俺は平気だから'],
+      attack: ['巨大な刃を振り下ろした', '刃状の腕で薙ぎ払った', '身体中の刃で同時に突いた'],
+      low: ['……まだ、大丈夫だ'],
+      win: ['よかった……無事で'],
+      lose: ['……ごめん、持ちきれなかった']
+    },
+    init(f) { f.meters.pain = 0; f.meters.heavy = 0; },
+    // 苦痛の蓄積：ラウンド経過そのものでも少しずつ、被弾すると大きく増える
+    onRound(ctx, f, foe) {
+      let gain = 1.5;
+      if (ctx.feat('生命の気配')) gain *= 1.3;
+      f.meters.pain = Math.min(300, f.meters.pain + gain);
+      // 万苦抱身：苦痛が限界近くまで溜まると、防御と再生力が大幅上昇する代わりに精神が不安定になる
+      if (!f.flags.overload && f.meters.pain >= 200) {
+        f.flags.overload = true;
+        addMod(f, { key: 'overload_def', stat: 'def', mul: 1.3, turns: 99, permanent: true });
+        skill(ctx, f, '万苦抱身', '身体中の刃が異常発達し、驚異的な防御力と再生力を発揮し始めた――しかしその内側では、押し込めた苦痛が限界に近づいている');
+      }
+    },
+    onRoundEnd(ctx, f) {
+      if (f.flags.overload) f.hp = Math.min(f.maxHp, f.hp + f.maxHp * 0.015);
+    },
+    onDamaged(ctx, f, src, dmg) {
+      f.meters.pain = Math.min(300, f.meters.pain + dmg * 0.4);
+    },
+    // 苦痛装甲：苦痛が多いほど防御が上がる
+    statMul(f, stat) {
+      if (stat === 'def') return 1 + Math.min(0.5, (f.meters.pain / 300) * 0.5);
+      return 1;
+    },
+    // 重苦刃：命中するたび相手の素早さを削り、蓄積が最大になると強烈な倦怠感で動きを止めることがある
+    onHit(ctx, f, foe) {
+      if (f.meters.heavy < 8) {
+        f.meters.heavy++;
+        addMod(foe, { key: 'omor_heavy', stat: 'spd', mul: 1 - clamp(0.04 * f.meters.heavy, 0, 0.32), turns: 99 });
+        if (f.meters.heavy % 3 === 1) skill(ctx, f, '重苦刃', `${foe.name}の身体が重くなったような感覚に襲われ、動きが鈍くなっていく`);
+      } else if (ctx.r.chance(0.12)) {
+        foe.stun = (foe.stun || 0) + 1;
+        ctx.say('info', `${foe.name}は強烈な倦怠感に襲われ、「もう戦いたくない」と一瞬動きを止めた`, { side: foe.side });
+      }
+    },
+    chooseAction(ctx, f, foe) {
+      const { r } = ctx;
+      // 痛哭反刃：本人はあまり使いたがらないため、追い詰められて初めて出す蓄積カウンター
+      if (!f.flags.counter && f.hp <= f.maxHp * 0.2 && f.meters.pain >= 60) {
+        f.flags.counter = true;
+        const mult = 1.4 + (f.meters.pain / 300) * 1.6;
+        return {
+          name: '痛哭反刃', mult, big: true, label: '「……もう、少しだけ返させてもらう」――',
+          after(ctx, f) { f.meters.pain = Math.max(0, f.meters.pain - 120); }
+        };
+      }
+      // 抱界翼：単体では自分自身を守る盾として簡易実装（味方をかばう効果はteam.js側の拡張が必要）
+      if (!f.flags.wing && f.hp < f.maxHp * 0.45) {
+        f.flags.wing = true;
+        f.shield += f.maxHp * 0.12 * Math.max(0.3, f.meters.pain / 300);
+        skill(ctx, f, '抱界翼', '巨大な刃翼を広げ、攻撃を自分で受け止める構えを取った');
+        return { skip: true, text: `${f.name}は防御の構えを取った` };
+      }
+      // 哀縛尾：速く・攻撃的な相手ほど優先して拘束する（殺さず制圧したい、という性格の反映）
+      if (!f.flags.bound && ctx.round >= 4 && ctx.round % 6 === 4) {
+        f.flags.bound = true;
+        const priority = statOf(foe, 'spd') > statOf(f, 'spd') || foe.tags.has('高揚');
+        if (priority || r.chance(0.5)) {
+          return {
+            special(ctx, f, foe) {
+              skill(ctx, f, '哀縛尾', `巨大な尾が${foe.name}を囲み、刃の先端を地面へ突き刺して檻を作った`);
+              foe.bind = (foe.bind || 0) + 2;
+            }
+          };
+        }
+      }
+      // 万苦抱身が発動している間は、押し込めた苦痛でまれに動きが乱れる
+      if (f.flags.overload && r.chance(0.1)) {
+        return { skip: true, text: `${f.name}「……っ」（押し込めた苦痛で、一瞬動きが乱れた）` };
+      }
+      return { name: ctx.line(f, 'attack'), mult: 0.85 };
+    }
+  },
+
+  // ------------------------------------------------------------------ 015
+  chr_015: {
+    short: 'スクアリオン',
+    uses: [],
+    lines: {
+      intro: ['みんなで行こう！', 'どっちに行く？　みんなが行く方かな'],
+      attack: ['巨大な質量で突進した', '群片が四方八方から同時に襲いかかった', '群れごと体当たりした'],
+      low: ['一人じゃ、ちょっと心細いな……'],
+      win: ['みんなで勝てた！'],
+      lose: ['……あれ、みんなはどこ？']
+    },
+    init(f) { f.meters.sync = 20; },
+    // 同調圧力ゲージ：参加人数が多いほど初期値が高い（team.js側で ctx.partySize / ctx.teamSize を渡す想定）
+    onStart(ctx, f, foe) {
+      const partySize = ctx.partySize || ctx.teamSize || 1;
+      f.meters.sync = clamp(20 + (partySize - 1) * 15, 20, 100);
+      if (partySize <= 1) f.flags.solo = true;
+      if (foe.tags.has('分析')) {
+        f.flags.dampened = true;
+        skill(ctx, f, '（同調が効きにくい）', `${foe.name}は自分自身の判断で動く相手だ。全群一致の圧力が効きにくい`);
+      }
+    },
+    onHit(ctx, f) { f.meters.sync = Math.min(100, f.meters.sync + 3); },
+    syncRate(f) { let s = f.meters.sync / 100; if (f.flags.dampened) s *= 0.4; return s; },
+    statMul(f, stat) {
+      if (stat === 'atk') return 1 + this.syncRate(f) * 0.25;
+      return 1;
+    },
+    accuracy(ctx, f) { return this.syncRate(f) * 0.12; },
+    // 群泳回避：単発の大技には非常に強い
+    evasion(ctx, f, attacker, opt) {
+      let e = this.syncRate(f) * 0.08;
+      if (opt && opt.big) e += 0.25;
+      return e;
+    },
+    chooseAction(ctx, f, foe) {
+      const { r } = ctx;
+      // 万群一魚：奥義。同調が満タン、または追い詰められた時
+      if (!f.flags.ult && (f.meters.sync >= 95 || f.hp < f.maxHp * 0.25)) {
+        f.flags.ult = true;
+        return {
+          name: '万群一魚', mult: 2.6, big: true, sure: f.meters.sync >= 70,
+          label: '無数の群片が完全に同期し、一つの巨大な意思となって突進する――',
+          after(ctx, f, foe) { addMod(foe, { key: 'ult_sync', stat: 'spd', mul: 0.8, turns: 2 }); }
+        };
+      }
+      // 群体盾：一定間隔でシールドを張り直す
+      if (ctx.round % 5 === 2) {
+        return {
+          special(ctx, f, foe) {
+            const amount = f.maxHp * 0.1 * Math.max(0.4, FIGHTER_KITS.chr_015.syncRate(f));
+            f.shield = Math.max(f.shield, amount);
+            skill(ctx, f, '群体盾', '群片を何層にも重ね、外側から内側へ高速で交代させる防壁を張った');
+          }
+        };
+      }
+      // 千群喰：多段攻撃
+      if (ctx.round % 4 === 0) {
+        return { name: '千群喰', mult: 1.3, hits: 4, label: '無数の群片が上下左右から同時に襲いかかる――' };
+      }
+      return { name: '群海突撃', mult: 1.05 };
+    }
+  },
+
+  // ------------------------------------------------------------------ 016
+  chr_016: {
+    short: 'クロノロン',
+    uses: ['sound'],
+    lines: {
+      intro: ['ちょっと一人にしてくれ', '……よし、始めようか'],
+      attack: ['時計塔から青いエネルギー光線を放った', '巨大な鐘を打ち鳴らした', '秒針型の杭を撃ち出した'],
+      low: ['……もう少しだけ、時間をくれ'],
+      win: ['よし、遊ぼう'],
+      lose: ['……今日はもう、独刻に入るよ']
+    },
+    init(f) { f.meters.chrono = 0; f.meters.delay = 0; f.meters.fatigue = 0; },
+    onRound(ctx, f) {
+      f.flags.usedChronoThisTurn = false;
+      f.meters.chrono = Math.min(100, f.meters.chrono + 5);
+    },
+    // 時計塔砲撃：命中するたび相手の行動を遅らせる（縮脚愛化と同じ方式のスタック）
+    onHit(ctx, f, foe) {
+      if (f.meters.delay < 8) {
+        f.meters.delay++;
+        addMod(foe, { key: 'chrono_delay', stat: 'spd', mul: 1 - clamp(0.035 * f.meters.delay, 0, 0.28), turns: 99 });
+        if (f.meters.delay % 3 === 1) skill(ctx, f, '時計塔砲撃', `${foe.name}は意識ははっきりしているのに、身体だけが思うようについてこなくなっていく`);
+      }
+    },
+    evasion(ctx, f) { return (f.meters.chrono / 100) * 0.06; },
+    chooseAction(ctx, f, foe, extra) {
+      const { r } = ctx;
+      // 独時世界：奥義
+      if (!f.flags.ult && (f.hp <= f.maxHp * 0.25 || f.meters.chrono >= 100)) {
+        f.flags.ult = true;
+        return {
+          name: '独時世界', mult: 1.6, big: true, sure: true,
+          label: '戦場そのものが、無数の「個人時間」へ分割されていく――',
+          after(ctx, f, foe) {
+            foe.stun = (foe.stun || 0) + 1;   // 1対1では「次の行動を1回スキップ」として再現
+            ctx.say('info', `${foe.name}は、自分だけ取り残されたような時間のズレに襲われた`, { side: foe.side });
+          }
+        };
+      }
+      // 独刻休息：HP30%割れで一度だけ
+      if (!f.flags.rest && f.hp < f.maxHp * 0.3) {
+        f.flags.rest = true;
+        return {
+          special(ctx, f, foe) {
+            const heal = f.maxHp * 0.12;
+            f.hp = Math.min(f.maxHp, f.hp + heal);
+            f.mods = f.mods.filter(m => (m.mul ?? 1) >= 1 || m.permanent);
+            skill(ctx, f, '独刻休息', `「ちょっと休憩」――自分だけの独刻領域へ入り、短時間休んだ（体力+${Math.round(heal)}）`);
+          }
+        };
+      }
+      // 独刻歩行：独刻値を消費して追加行動。精神疲労が溜まるほど不発しやすくなる
+      if (!extra && !f.flags.usedChronoThisTurn && f.meters.chrono >= 40 && r.chance(0.4)) {
+        const failChance = clamp(f.meters.fatigue * 0.05, 0, 0.6);
+        if (r.chance(failChance)) {
+          return { skip: true, text: `${f.name}「……あれ、今日は上手く動けない」（精神疲労で独刻歩行が不発）` };
+        }
+        f.flags.usedChronoThisTurn = true;
+        f.meters.chrono -= 40;
+        f.meters.fatigue += 1;
+        return {
+          special(ctx, f, foe) {
+            skill(ctx, f, '独刻歩行', '「ちょっと一人にしてくれ」――自分だけ時間の速度を変え、間合いを詰め直した');
+            ctx.attack(f, foe, { name: '秒針杭', mult: 1.15 });
+            act(ctx, f, true);
+          }
+        };
+      }
+      // 孤刻鎖：相手が自分より遅いほど成功しやすい拘束
+      if (!extra && ctx.round % 6 === 3) {
+        const spdGap = clamp((statOf(f, 'spd') - statOf(foe, 'spd')) / 300, 0, 0.4);
+        return {
+          special(ctx, f, foe) {
+            skill(ctx, f, '孤刻鎖', `巨大な鎖が${foe.name}を囲み、小さな独刻領域へ閉じ込めた`);
+            if (r.chance(0.35 + spdGap)) {
+              foe.bind = (foe.bind || 0) + 2;
+              ctx.say('info', `${foe.name}は「一人で待ってて」と言われるように、動きを封じられた`, { side: foe.side });
+            }
+          }
+        };
+      }
+      // 時鐘砲：命中率を下げる音の攻撃
+      if (!extra && ctx.round % 5 === 1) {
+        return {
+          name: '時鐘砲', mult: 0.9,
+          after(ctx, f, foe, total) { if (total > 0) addMod(foe, { key: 'bell', stat: 'wis', mul: 0.9, turns: 3 }); }
+        };
+      }
+      return { name: ctx.line(f, 'attack'), mult: 1.0 };
+    }
   }
 
 };
@@ -1215,7 +1458,10 @@ const KIT_TUNE = {
  'chr_010': 1.881,
  'chr_011': 1.285,
  'chr_012': 0.996,
- 'chr_013': 0.917
+ 'chr_013': 0.917,
+ 'chr_014': 0.35,
+ 'chr_015': 0.24,
+ 'chr_016': 0.8
 };
 
 // 試験クエスト専用の敵。既存13体の kit は変更しない。

@@ -14,8 +14,16 @@ const GACHAS = [
     guarantee: { count: 10, minRarity: 4 }, guaranteeText: '10連で★4確定！！',
     limited: true, open: true,
     note: 'タメリス・ネガヴォイド・カンカラッチは、このガチャでしか出会えません（のちに通常ガチャへ加わります）'
+  },
+  {
+    id: 'limited_2', name: '万象顕現ガチャ Vol.2', subtitle: '― 抱込・同調・独時 ―',
+    banner: 'img/banner_limited_2.webp', price: 300, price10: 3000,
+    chars: ['chr_014','chr_015','chr_016','chr_002','chr_008'],
+    guarantee: { count: 10, minRarity: 4 }, guaranteeText: '10連で★4確定！！',
+    limited: true, open: true,
+    note: 'オモルディア・スクアリオン・クロノロンは、このガチャ限定です'
   }
 ];
 
-const LIMITED_ONLY = ['chr_011','chr_012','chr_013'];
+const LIMITED_ONLY = ['chr_011','chr_012','chr_013','chr_014','chr_015','chr_016'];
 const GACHA_RATES = [[1,50],[2,28],[3,15],[4,5.5],[5,1.5]];
